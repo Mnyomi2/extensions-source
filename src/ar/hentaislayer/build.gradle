@@ -1,0 +1,9 @@
+ext {
+    extName = 'Hentai Slayer'
+    extClass = '.HentaiSlayer'
+    themePkg = 'fuzzydoodle'
+    overrideVersionCode = 4
+    isNsfw = true
+}
+
+apply plugin: "kei.plugins.extension.legacy"

@@ -1,0 +1,10 @@
+ext {
+    extName = 'Arab Toons'
+    extClass = '.ArabToons'
+    themePkg = 'madara'
+    baseUrl = 'https://arabtoons.net'
+    overrideVersionCode = 1
+    isNsfw = true
+}
+
+apply plugin: "kei.plugins.extension.legacy"
