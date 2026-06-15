@@ -5,11 +5,11 @@ name: Build AR repo
 #      (signing key is generated on the fly inside the runner).
 #   2. Uses the keiyoushi Inspector to extract source metadata.
 #   3. Generates index.min.json + index.json + icons.
-#   4. Publishes everything to the "repo" branch of THIS repository
+#   4. Publishes everything to the "repo-ar" branch of THIS repository
 #      using the built-in GITHUB_TOKEN.
 #
 # After it runs, add this URL as an extension source in your app:
-#   https://raw.githubusercontent.com/<OWNER>/<REPO>/repo/index.min.json
+#   https://raw.githubusercontent.com/<OWNER>/<REPO>/repo-ar/index.min.json
 #
 # Trigger: manually (Actions -> Build AR repo -> Run workflow) or on push to main.
 
@@ -23,7 +23,7 @@ on:
       - '.github/workflows/build_ar_repo.yml'
 
 permissions:
-  contents: write   # needed to push the repo branch via GITHUB_TOKEN
+  contents: write   # needed to push the repo-ar branch via GITHUB_TOKEN
 
 concurrency:
   group: ${{ github.workflow }}
@@ -115,20 +115,20 @@ jobs:
           PY
           ls -R repo | head -40
 
-      - name: Publish to repo branch
+      - name: Publish to repo-ar branch
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Work in a clean worktree for the repo branch
+          # Work in a clean worktree for the repo-ar branch
           mkdir -p /tmp/publish
           cp -r repo/* /tmp/publish/
 
-          git fetch origin repo || true
-          if git show-ref --verify --quiet refs/remotes/origin/repo; then
-            git checkout -B repo origin/repo
+          git fetch origin repo-ar || true
+          if git show-ref --verify --quiet refs/remotes/origin/repo-ar; then
+            git checkout -B repo-ar origin/repo-ar
           else
-            git checkout --orphan repo
+            git checkout --orphan repo-ar
             git rm -rf . >/dev/null 2>&1 || true
           fi
 
@@ -139,7 +139,7 @@ jobs:
           git add apk icon index.json index.min.json
           if [ -n "$(git status --porcelain)" ]; then
             git commit -m "Update AR extensions repo"
-            git push origin repo
+            git push origin repo-ar
           else
             echo "No changes to publish."
           fi
