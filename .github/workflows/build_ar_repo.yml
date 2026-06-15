@@ -77,7 +77,9 @@ jobs:
           ALIAS: key0
           KEY_STORE_PASSWORD: android
           KEY_PASSWORD: android
-        run: ./gradlew ${{ steps.modules.outputs.tasks }} --stacktrace
+        run: |
+          chmod +x gradlew
+          ./gradlew ${{ steps.modules.outputs.tasks }} --stacktrace
 
       - name: Collect APKs
         run: |
