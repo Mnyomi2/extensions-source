@@ -30,4 +30,3 @@ If you also need the official Keiyoushi extension index:
   ```text
   https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json
   ```
-```
