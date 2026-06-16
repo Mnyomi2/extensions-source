@@ -198,10 +198,11 @@ class Mangasid : HttpSource() {
 
     class GenreList(genres: List<Genre>) : Filter.Group<Genre>("التصنيفات", genres)
 
-    class SortFilter : Filter.Select<String>(
-        "الترتيب",
-        arrayOf("الأحدث", "الأكثر شعبية", "أ-ي"),
-    ) {
+    class SortFilter :
+        Filter.Select<String>(
+            "الترتيب",
+            arrayOf("الأحدث", "الأكثر شعبية", "أ-ي"),
+        ) {
         fun toUriValue() = when (state) {
             0 -> "latest"
             1 -> "views"
@@ -212,7 +213,7 @@ class Mangasid : HttpSource() {
 
     override fun getFilterList() = FilterList(
         SortFilter(),
-        GenreList(getGenres())
+        GenreList(getGenres()),
     )
 
     private fun getGenres() = listOf(
@@ -279,6 +280,6 @@ class Mangasid : HttpSource() {
         Genre("كوميك"),
         Genre("العاب"),
         Genre("أكاديمية"),
-        Genre("نهاية العالم")
+        Genre("نهاية العالم"),
     )
 }
