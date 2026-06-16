@@ -124,6 +124,10 @@ jobs:
           mkdir -p /tmp/publish
           cp -r repo/* /tmp/publish/
 
+          # Reset local changes and clean untracked files to avoid checkout conflicts
+          git reset --hard
+          git clean -fd
+
           git fetch origin repo-ar || true
           if git show-ref --verify --quiet refs/remotes/origin/repo-ar; then
             git checkout -B repo-ar origin/repo-ar
