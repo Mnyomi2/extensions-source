@@ -1,6 +1,13 @@
 package eu.kanade.tachiyomi.extension.ar.mangasid
 
+import android.app.Application
+import android.content.Context
+import android.content.SharedPreferences
+import androidx.preference.CheckBoxPreference
+import androidx.preference.EditTextPreference
+import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -13,17 +20,26 @@ import keiyoushi.network.rateLimit
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
 import kotlin.time.Duration.Companion.seconds
 
-class Mangasid : HttpSource() {
+class Mangasid : HttpSource(), ConfigurableSource {
     override val name = "Mangasid"
-    override val baseUrl = "https://mangasid.com"
+
+    override val baseUrl: String
+        get() = preferences.getString(BASE_URL_PREF_KEY, BASE_URL_PREF_DEFAULT) ?: BASE_URL_PREF_DEFAULT
+
     override val lang = "ar"
     override val supportsLatest = true
 
     override val client = network.client.newBuilder()
         .rateLimit(2, 1.seconds)
         .build()
+
+    private val preferences: SharedPreferences by lazy {
+        Injekt.get<Application>().getSharedPreferences("source_$id", Context.MODE_PRIVATE)
+    }
 
     override fun headersBuilder() = super.headersBuilder()
         .set("Referer", "$baseUrl/")
@@ -118,7 +134,7 @@ class Mangasid : HttpSource() {
             .joinToString("\n") { it.text().trim() }
             .takeIf { it.isNotEmpty() }
 
-        genre = document.select("a[href*=genres=], span.bg-secondary, span.bg-primary/20, .genre-badge")
+        genre = document.select("a[href*=genres=], span.bg-secondary, span[class*=bg-primary/20], .genre-badge")
             .map { it.text().trim() }
             .filter { it.isNotEmpty() }
             .joinToString(", ")
@@ -138,10 +154,27 @@ class Mangasid : HttpSource() {
     // Chapters
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = response.asJsoup()
+        val cleanNamePref = preferences.getBoolean(CLEAN_CHAPTER_NAME_KEY, true)
+
         val chapters = document.select("a[href*=/reader/]").map { element ->
             SChapter.create().apply {
                 url = element.attr("href")
-                name = element.text().trim()
+
+                var nameText = element.text().trim()
+                if (cleanNamePref) {
+                    val elementCopy = element.clone()
+                    // Remove nested labels containing dates like '16/2026/6' and AI tags
+                    elementCopy.select("span:contains(/), span:matches(\\d+/\\d+/\\d+), .date, .time").remove()
+                    elementCopy.select("span:contains(AI), .badge, .ai-badge").remove()
+                    val cleaned = elementCopy.text().trim()
+                        .replace("\n", " ")
+                        .replace("\\s+".toRegex(), " ")
+                    if (cleaned.isNotEmpty()) {
+                        nameText = cleaned
+                    }
+                }
+
+                name = nameText
                 date_upload = parseChapterDate(element.parent()?.text() ?: "")
             }
         }
@@ -200,6 +233,35 @@ class Mangasid : HttpSource() {
     }
 
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
+
+    // Preferences Setup
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        val baseUrlPref = EditTextPreference(screen.context).apply {
+            key = BASE_URL_PREF_KEY
+            title = BASE_URL_PREF_TITLE
+            summary = "الحالي: %s"
+            setDefaultValue(BASE_URL_PREF_DEFAULT)
+            dialogTitle = BASE_URL_PREF_TITLE
+
+            setOnPreferenceChangeListener { _, newValue ->
+                preferences.edit().putString(BASE_URL_PREF_KEY, newValue as String).commit()
+            }
+        }
+
+        val cleanChapterPref = CheckBoxPreference(screen.context).apply {
+            key = CLEAN_CHAPTER_NAME_KEY
+            title = CLEAN_CHAPTER_NAME_TITLE
+            summary = CLEAN_CHAPTER_NAME_SUMMARY
+            setDefaultValue(true)
+
+            setOnPreferenceChangeListener { _, newValue ->
+                preferences.edit().putBoolean(CLEAN_CHAPTER_NAME_KEY, newValue as Boolean).commit()
+            }
+        }
+
+        screen.addPreference(baseUrlPref)
+        screen.addPreference(cleanChapterPref)
+    }
 
     // Filters
     class Genre(name: String) : Filter.CheckBox(name)
@@ -336,4 +398,14 @@ class Mangasid : HttpSource() {
         Genre("نهاية العالم"),
         Genre("ون شوت"),
     )
+
+    companion object {
+        private const val BASE_URL_PREF_KEY = "baseUrl_pref"
+        private const val BASE_URL_PREF_TITLE = "عنوان الموقع (Base URL)"
+        private const val BASE_URL_PREF_DEFAULT = "https://mangasid.com"
+
+        private const val CLEAN_CHAPTER_NAME_KEY = "cleanChapterName_pref"
+        private const val CLEAN_CHAPTER_NAME_TITLE = "تنظيف اسم الفصل"
+        private const val CLEAN_CHAPTER_NAME_SUMMARY = "إزالة التواريخ والوسوم الإضافية المدمجة في اسم الفصل"
+    }
 }
