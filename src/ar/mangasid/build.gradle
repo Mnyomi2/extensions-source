@@ -1,5 +1,5 @@
 ext {
-    name = 'MangaSid'
+    extName = 'MangaSid'
     extClass = '.Mangasid'
     baseUrl = 'https://mangasid.com'
     extVersionCode = 1
