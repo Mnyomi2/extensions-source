@@ -78,6 +78,10 @@ jobs:
           KEY_STORE_PASSWORD: android
           KEY_PASSWORD: android
         run: |
+          if [ -z "${{ steps.modules.outputs.tasks }}" ]; then
+            echo "No test modules found to build."
+            exit 1
+          fi
           chmod +x gradlew
           ./gradlew ${{ steps.modules.outputs.tasks }} --stacktrace
 
