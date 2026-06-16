@@ -1,7 +1,7 @@
 ext {
-    extName = 'Manga Sid'
-    extClass = '.Mangasid'
-    extVersionCode = 1
+    extName = 'Team X2'
+    extClass = '.TeamX2'
+    extVersionCode = 30
     isNsfw = false
 }
 
