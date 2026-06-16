@@ -162,29 +162,37 @@ class Mangasid : HttpSource() {
     override fun pageListParse(response: Response): List<Page> {
         val document = response.asJsoup()
 
-        // Select standard reader layout image elements
-        val imageElements = document.select("div.reader-images img, div.reader-container img, div.reader img, .reader-image-container img, img.reader-img")
+        // Extract from serialized Astro ChapterImageViewer props to bypass scraper trap image scripts
+        val viewerElement = document.selectFirst("astro-island[component-url*=ChapterImageViewer]")
+        if (viewerElement != null) {
+            val propsJson = viewerElement.attr("props")
+            val unescapedProps = propsJson
+                .replace("&quot;", "\"")
+                .replace("&amp;", "&")
+                .replace("\\/", "/")
+                .replace("\\u0026", "&")
 
+            val urlRegex = """https?://[^"\s]+\.(?:jpg|jpeg|png|webp|gif)[^"\s]*""".toRegex()
+            val urls = urlRegex.findAll(unescapedProps)
+                .map { it.value.trim() }
+                .filterNot { it.contains("logo") || it.contains("avatar") || it.contains("cover") }
+                .distinct()
+                .toList()
+
+            if (urls.isNotEmpty()) {
+                return urls.mapIndexed { index, url ->
+                    Page(index, "", url)
+                }
+            }
+        }
+
+        // Fallback parser in case elements render without active hydrated scripts
+        val imageElements = document.select("div.manga-page img, div.reader-images img, div.reader-container img")
         if (imageElements.isNotEmpty()) {
             return imageElements.mapIndexed { index, img ->
                 val imageUrl = img.attr("abs:data-src").takeIf { it.isNotEmpty() }
                     ?: img.attr("abs:src")
                 Page(index, "", imageUrl)
-            }
-        }
-
-        // Fallback for scripts declaring static image lists (if hydrated asynchronously)
-        val scriptContent = document.select("script").html()
-        val urlRegex = """https?://[^"\s]+\.(?:jpg|jpeg|png|webp|gif)""".toRegex()
-        val foundUrls = urlRegex.findAll(scriptContent)
-            .map { it.value }
-            .filterNot { it.contains("logo") || it.contains("avatar") || it.contains("cover") }
-            .distinct()
-            .toList()
-
-        if (foundUrls.isNotEmpty()) {
-            return foundUrls.mapIndexed { index, url ->
-                Page(index, "", url)
             }
         }
 
@@ -217,69 +225,115 @@ class Mangasid : HttpSource() {
     )
 
     private fun getGenres() = listOf(
-        Genre("دراما"),
-        Genre("أكشن"),
-        Genre("خيال"),
-        Genre("فانتازيا"),
-        Genre("مغامرة"),
-        Genre("رومانسي"),
-        Genre("كوميدي"),
-        Genre("إثارة"),
-        Genre("شوجو"),
-        Genre("رومانسى"),
-        Genre("شونين"),
-        Genre("مانهوا"),
-        Genre("فنون قتال"),
-        Genre("غموض"),
-        Genre("سحر"),
-        Genre("قوة خارقة"),
-        Genre("تاريخي"),
-        Genre("حياة مدرسية"),
-        Genre("بطل غير اعتيادي"),
-        Genre("ويب تون"),
-        Genre("وحوش"),
-        Genre("نظام"),
-        Genre("خارق للطبيعة"),
-        Genre("الحياة اليومية"),
-        Genre("إيسيكاي"),
-        Genre("تناسخ"),
-        Genre("السفر عبر الزمن"),
-        Genre("مانجا"),
-        Genre("دموي"),
-        Genre("جوسيه"),
-        Genre("سينين"),
-        Genre("شياطين"),
-        Genre("اعادة احياء"),
-        Genre("نفسي"),
-        Genre("تشويق"),
-        Genre("صقل"),
-        Genre("رعب"),
-        Genre("إنتقام"),
-        Genre("موريم"),
-        Genre("حديث"),
-        Genre("شريحة من الحياة"),
-        Genre("حريم"),
-        Genre("ثأر"),
-        Genre("تجسيد"),
-        Genre("عنف"),
-        Genre("الخيال العلمي"),
-        Genre("عائلى"),
-        Genre("حرب"),
-        Genre("مأساة"),
-        Genre("تراجيدي"),
-        Genre("ملائكة"),
-        Genre("داخل لعبة"),
-        Genre("رياضه"),
-        Genre("قتال"),
-        Genre("خارق"),
-        Genre("زنزانات"),
-        Genre("عالم مختلف"),
-        Genre("لعبه"),
-        Genre("النجاة"),
-        Genre("جريمة"),
-        Genre("كوميك"),
-        Genre("العاب"),
         Genre("أكاديمية"),
+        Genre("أكشن"),
+        Genre("ألعاب"),
+        Genre("الات"),
+        Genre("الجانب المظلم من الحياة"),
+        Genre("الخيال العلمي"),
+        Genre("النجاة"),
+        Genre("الواقع الافتراضي"),
+        Genre("الهة"),
+        Genre("امرأة شريرة"),
+        Genre("انتقال"),
+        Genre("انتقام"),
+        Genre("بطل خارق"),
+        Genre("بطل غير اعتيادي"),
+        Genre("بطل مخطط"),
+        Genre("بوابات"),
+        Genre("تاريخي"),
+        Genre("تراجم"),
+        Genre("تراجيدي"),
+        Genre("تجسيد"),
+        Genre("تحقيق"),
+        Genre("تخطيط"),
+        Genre("ترويض"),
+        Genre("تشويق"),
+        Genre("تصوف"),
+        Genre("تلوين رسمي"),
+        Genre("تنمر"),
+        Genre("تناسخ"),
+        Genre("جريمة"),
+        Genre("جوسيه"),
+        Genre("جواسيس"),
+        Genre("جندر اسواب"),
+        Genre("جندر بندر"),
+        Genre("حديث"),
+        Genre("حرب"),
+        Genre("حريم"),
+        Genre("حريم عكسى"),
+        Genre("حياة مدرسية"),
+        Genre("حيوانات"),
+        Genre("خارق"),
+        Genre("خارق للطبيعة"),
+        Genre("خيال"),
+        Genre("داخل رواية"),
+        Genre("داخل لعبة"),
+        Genre("دراما"),
+        Genre("دموي"),
+        Genre("راشد"),
+        Genre("رعب"),
+        Genre("رعاية اطفال"),
+        Genre("رواية عربية"),
+        Genre("رومانسي"),
+        Genre("رومانسى"),
+        Genre("رياضة"),
+        Genre("رياضى"),
+        Genre("ساموراي"),
+        Genre("سايكوباث"),
+        Genre("سحر"),
+        Genre("سفر عبر الزمن"),
+        Genre("سينين"),
+        Genre("شريحة من الحياة"),
+        Genre("شرطة"),
+        Genre("شركة"),
+        Genre("شوجو"),
+        Genre("شونين"),
+        Genre("شياطين"),
+        Genre("طبخ"),
+        Genre("طبي"),
+        Genre("عائلى"),
+        Genre("عالم مختلف"),
+        Genre("عسكري"),
+        Genre("عصور وسطى"),
+        Genre("عنف"),
+        Genre("غموض"),
+        Genre("فانتازيا"),
+        Genre("فنتازيا"),
+        Genre("فنون الدفاع عن النفس"),
+        Genre("فنون قتال"),
+        Genre("فوق الطبيعة"),
+        Genre("قوة خارقة"),
+        Genre("كائنات فضائية"),
+        Genre("كوميدي"),
+        Genre("كوميك"),
+        Genre("لعبه"),
+        Genre("لعبة فيديو"),
+        Genre("مافيا"),
+        Genre("مانجا"),
+        Genre("مانجا ملونة"),
+        Genre("مانهوا"),
+        Genre("مأساة"),
+        Genre("مأساوي"),
+        Genre("مؤامرات"),
+        Genre("مجموعة قصص"),
+        Genre("مدرسه"),
+        Genre("مستذئب"),
+        Genre("مصاصى الدماء"),
+        Genre("معالج"),
+        Genre("مغني"),
+        Genre("مغامرة"),
+        Genre("مقتبسة"),
+        Genre("مقطع طولي"),
+        Genre("ملائكة"),
+        Genre("ملونة"),
+        Genre("ممالك"),
+        Genre("موريم"),
+        Genre("موسيقى"),
+        Genre("ناضج"),
+        Genre("نبالة"),
+        Genre("نفسي"),
         Genre("نهاية العالم"),
+        Genre("ون شوت"),
     )
 }
