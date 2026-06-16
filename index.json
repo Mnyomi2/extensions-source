@@ -204,6 +204,23 @@
     ]
   },
   {
+    "name": "Tachiyomi: Test",
+    "pkg": "eu.kanade.tachiyomi.extension.ar.test",
+    "apk": "tachiyomi-ar.test-v1.4.1.apk",
+    "lang": "ar",
+    "code": 1,
+    "version": "1.4.1",
+    "nsfw": 0,
+    "sources": [
+      {
+        "name": "Test",
+        "lang": "ar",
+        "id": "6135114821138230883",
+        "baseUrl": "https://waveteamy.com"
+      }
+    ]
+  },
+  {
     "name": "Tachiyomi: Anyone Manga",
     "pkg": "eu.kanade.tachiyomi.extension.ar.anyonemanga",
     "apk": "tachiyomi-ar.anyonemanga-v1.4.51.apk",
