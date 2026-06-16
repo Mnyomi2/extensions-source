@@ -476,6 +476,23 @@
     ]
   },
   {
+    "name": "Tachiyomi: Manga Sid",
+    "pkg": "eu.kanade.tachiyomi.extension.ar.mangasid",
+    "apk": "tachiyomi-ar.mangasid-v1.4.1.apk",
+    "lang": "ar",
+    "code": 1,
+    "version": "1.4.1",
+    "nsfw": 0,
+    "sources": [
+      {
+        "name": "مانجا سيد",
+        "lang": "ar",
+        "id": "1074830477248861024",
+        "baseUrl": "https://mangasid.com"
+      }
+    ]
+  },
+  {
     "name": "Tachiyomi: Loner Translations",
     "pkg": "eu.kanade.tachiyomi.extension.ar.lonertranslations",
     "apk": "tachiyomi-ar.lonertranslations-v1.4.13.apk",
