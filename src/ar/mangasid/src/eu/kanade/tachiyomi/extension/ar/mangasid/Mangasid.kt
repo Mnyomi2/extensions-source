@@ -21,237 +21,313 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import kotlin.io.encoding.Base64
 import kotlin.time.Duration.Companion.seconds
+import eu.kanade.tachiyomi.network.POST
+import keiyoushi.utils.extractNextJs
+import keiyoushi.utils.parseAs
+import keiyoushi.utils.tryParse
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import okhttp3.FormBody
+import java.text.SimpleDateFormat
+import java.util.Locale
+import kotlin.io.encoding.Base64
 
 class Mangasid : HttpSource() {
     override val name = "Mangasid"
-    override val baseUrl = "https://waveteamy.com"
+    override val baseUrl = "https://mangasid.com"
+
     override val lang = "ar"
 
-    private val cloudUrl = "https://wcloud.site"
-
-    private val pageLimit = 40
     override val supportsLatest = true
 
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH)
-    private val oldDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.ENGLISH)
-
-    override val client =
-        network.client
-            .newBuilder()
-            .rateLimit(10, 1.seconds)
-            .build()
-
-    override fun headersBuilder() = super.headersBuilder()
-        .set("Referer", "$baseUrl/")
-
-    private val rscHeaders = headersBuilder()
-        .set("rsc", "1")
+    override val client = network.client
+        .newBuilder()
+        .connectTimeout(15.seconds)
+        .readTimeout(30.seconds)
+        .rateLimit(10, 1.seconds)
         .build()
 
-    // Popular
-    override fun popularMangaRequest(page: Int) = POST(
-        "$baseUrl/wapi/hanout/v1/series/series-list",
-        headers,
-        FormBody
-            .Builder()
-            .add("page", page.toString())
-            .add("limit", pageLimit.toString())
-            .build(),
-    )
+    override fun headersBuilder() = super.headersBuilder()
+        .add("Referer", "$baseUrl/")
+
+    private var filtersLoaded = false
+
+    private val genreNames: MutableList<String> = mutableListOf()
+    private val statusNames: MutableList<String> = mutableListOf()
+
+    private fun Element.imgAttr(): String = when {
+        hasAttr("data-src") -> attr("abs:data-src")
+        hasAttr("src") -> attr("abs:src")
+        else -> ""
+    }
+
+    private fun String?.toStatus(): Int = when {
+        this == null -> SManga.UNKNOWN
+        contains("مستمر", ignoreCase = true) -> SManga.ONGOING
+        contains("مكتمل", ignoreCase = true) -> SManga.COMPLETED
+        contains("متوقف", ignoreCase = true) -> SManga.ON_HIATUS
+        else -> SManga.UNKNOWN
+    }
+
+    // --- Popular ---
+
+    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/manga-list?sort=views&page=$page", headers)
 
     override fun popularMangaParse(response: Response): MangasPage {
-        val dto = response.parseAs<List<WManga>>()
-        val mangas = dto.map { it.toSManga() }
-        return MangasPage(mangas, mangas.size == pageLimit)
+        val document = response.asJsoup()
+        val cards = document.select("div.manga-card")
+
+        val mangas = cards.map { card ->
+            SManga.create().apply {
+                val link = card.selectFirst("h3 a")!!
+                title = link.text()
+                setUrlWithoutDomain(link.attr("href"))
+                thumbnail_url = card.selectFirst("img")?.imgAttr()
+            }
+        }
+
+        val hasNextPage = document.selectFirst("nav a:last-child:not([aria-disabled=true])") != null
+
+        fetchFiltersIfNeeded(document)
+
+        return MangasPage(mangas, hasNextPage)
     }
 
-    // Latest
-    override fun latestUpdatesRequest(page: Int) = POST(
-        "$baseUrl/wapi/hanout/v1/series/releases-web",
-        headers,
-        FormBody
-            .Builder()
-            .add("page", page.toString())
-            .add("limit", pageLimit.toString())
-            .build(),
-    )
+    // --- Latest ---
+
+    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/manga-list?page=$page", headers)
 
     override fun latestUpdatesParse(response: Response): MangasPage {
-        val dto = response.parseAs<WLatestManga>()
-        val mangas = dto.chapters.map { it.toSManga() }
-        return MangasPage(mangas, !dto.isLastPage)
+        fetchFiltersIfNeeded(response.asJsoup())
+        return popularMangaParse(response)
     }
 
-    // Search
-    override fun searchMangaRequest(
+    // --- Search ---
+
+    override fun fetchSearchManga(
         page: Int,
         query: String,
         filters: FilterList,
-    ) = POST(
-        "$baseUrl/wapi/hanout/v1/series/series-list",
-        headers,
-        FormBody
-            .Builder()
-            .add("page", page.toString())
-            .add("keyUpValue", query)
-            .add("limit", pageLimit.toString())
-            .build(),
-    )
+    ): Observable<MangasPage> {
+        if (query.startsWith("http")) {
+            val baseHost = baseUrl.toHttpUrl().host
+            val seriesUrl = query.toHttpUrl()
 
-    override fun searchMangaParse(response: Response) = popularMangaParse(response)
+            if (seriesUrl.host != baseHost) throw Exception("Unsupported URL")
 
-    // Manga Details
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(baseUrl + manga.url, rscHeaders)
+            val manga = SManga.create().apply { url = seriesUrl.encodedPath }
 
-    override fun mangaDetailsParse(response: Response): SManga = SManga.create().apply {
-        val mangaData = response.extractNextJs<WMangaDetails>()!!
-        title = mangaData.name
-        thumbnail_url = mangaData.cover.toImage()
-        description = mangaData.story?.replace("\\n", "\n")
-        genre = (mangaData.genre + mangaData.type)
-            .filterNot { it.isNullOrBlank() }
-            .joinToString(", ")
-        status = mangaData.status.toStatus()
-        artist = mangaData.artist.takeIf { it != "Updating" }
-        author = mangaData.author.takeIf { it != "Updating" }
+            return fetchMangaDetails(manga)
+                .map {
+                    MangasPage(
+                        listOf(
+                            it.apply {
+                                url = manga.url
+                                initialized = true
+                            },
+                        ),
+                        false,
+                    )
+                }
+        }
+
+        return super.fetchSearchManga(page, query, filters)
     }
 
-    // Chapters
-    override fun chapterListRequest(manga: SManga) = GET(baseUrl + manga.url, rscHeaders)
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        val url = baseUrl.toHttpUrl().newBuilder()
+            .addPathSegment("manga-list")
+
+        if (query.isNotBlank()) {
+            url.addQueryParameter("search", query)
+        }
+
+        if (page > 1) {
+            url.addQueryParameter("page", page.toString())
+        }
+
+        if (query.isBlank()) {
+            var sortParam: String? = null
+            var sortOrder: String? = null
+            val selectedGenres = mutableListOf<String>()
+            var selectedStatus: String? = null
+
+            for (filter in filters) {
+                when (filter) {
+                    is SortFilter -> {
+                        val (sort, order) = filter.toSortParam()
+                        sortParam = sort
+                        sortOrder = order
+                    }
+                    is GenreFilter -> {
+                        val selected = filter.values[filter.state]
+                        if (selected != GenreFilter.ALL) {
+                            selectedGenres.add(selected)
+                        }
+                    }
+                    is StatusFilter -> {
+                        val selected = filter.values[filter.state]
+                        if (selected != StatusFilter.ALL) {
+                            selectedStatus = selected
+                        }
+                    }
+                    else -> {}
+                }
+            }
+
+            sortParam?.let { url.addQueryParameter("sort", it) }
+            if (sortOrder != null) url.addQueryParameter("sortOrder", sortOrder)
+            if (selectedGenres.isNotEmpty()) url.addQueryParameter("genres", selectedGenres.joinToString(","))
+            selectedStatus?.let { url.addQueryParameter("status", it) }
+        }
+
+        return GET(url.build(), headers)
+    }
+
+    override fun searchMangaParse(response: Response): MangasPage {
+        fetchFiltersIfNeeded(response.asJsoup())
+        return popularMangaParse(response)
+    }
+
+    // --- Filters ---
+
+    private fun fetchFiltersIfNeeded(document: org.jsoup.nodes.Document) {
+        if (filtersLoaded) return
+
+        genreNames.clear()
+        document.select("aside.filter-sidebar div.mb-4:has(h4:contains(التصنيفات)) button")
+            .mapNotNull { it.text().trim().takeIf { t -> t.isNotBlank() } }
+            .forEach { genreNames.add(it) }
+
+        statusNames.clear()
+        document.select("aside.filter-sidebar div.mb-6:has(h4:contains(الحالة)) button")
+            .mapNotNull { it.text().trim().takeIf { t -> t.isNotBlank() } }
+            .forEach { statusNames.add(it) }
+
+        if (genreNames.isNotEmpty() || statusNames.isNotEmpty()) {
+            filtersLoaded = true
+        }
+    }
+
+    override fun getFilterList(): FilterList {
+        if (!filtersLoaded) {
+            return FilterList(
+                Filter.Header(
+                    "الرجاء فتح قائمة المانجا الشعبية أو الأحدث\n" +
+                        "لتحميل خيارات التصفية",
+                ),
+            )
+        }
+
+        return FilterList(
+            Filter.Header("ملاحظة: التصفية لا تعمل مع البحث النصي"),
+            Filter.Separator(),
+            SortFilter(),
+            Filter.Separator(),
+            StatusFilter(statusNames),
+            Filter.Separator(),
+            GenreFilter(genreNames),
+        )
+    }
+
+    private class SortFilter :
+        Filter.Select<String>(
+            "الترتيب",
+            arrayOf("الأحدث", "الأكثر شعبية", "أ-ي"),
+        ) {
+        fun toSortParam(): Pair<String, String?> = when (state) {
+            0 -> "latest" to null
+            1 -> "views" to null
+            2 -> "title" to "ASC"
+            else -> "latest" to null
+        }
+    }
+
+    private class StatusFilter(vals: List<String>) :
+        Filter.Select<String>(
+            "الحالة",
+            vals.toTypedArray().ifEmpty { arrayOf(ALL) },
+        ) {
+        companion object {
+            const val ALL = "الكل"
+        }
+    }
+
+    private class GenreFilter(vals: List<String>) :
+        Filter.Select<String>(
+            "التصنيفات",
+            (listOf(ALL) + vals).toTypedArray(),
+        ) {
+        companion object {
+            const val ALL = "الكل"
+        }
+    }
+
+    // --- Details ---
+
+    override fun mangaDetailsParse(response: Response): SManga {
+        val document = response.asJsoup()
+
+        return SManga.create().apply {
+            title = document.selectFirst("h1")?.text() ?: ""
+
+            description = document.selectFirst(
+                "p.text-gray-300, div.description, .description p, div.summary, .summary p",
+            )?.text()
+
+            thumbnail_url = document.selectFirst("img[class*='rounded'], main img, div.flex img")?.imgAttr()
+                ?: document.selectFirst("img")?.imgAttr()
+
+            val statusText = document.selectFirst(
+                "span:contains(مستمر), span:contains(مكتمل), span:contains(متوقف)",
+            )?.text()
+            status = statusText.toStatus()
+
+            genre = document.select(
+                "a[class*=bg-], span[class*=bg-]",
+            ).mapNotNull { element ->
+                element.text().trim().takeIf { it.isNotBlank() && it.length < 20 }
+            }.takeIf { it.isNotEmpty() }?.joinToString(", ")
+        }
+    }
+
+    // --- Chapters ---
 
     override fun chapterListParse(response: Response): List<SChapter> {
-        val chapters = response.extractNextJs<List<WChapterList>>()
-            ?.toMutableList()
-            ?: return emptyList()
+        val document = response.asJsoup()
 
-        val workId = response.request.url.pathSegments[1]
-        var page = 2
+        val chapterLinks = document.select("a[href*=\"/reader/\"]")
 
-        while (true) {
-            val request = POST(
-                "$baseUrl/wapi/hanout/v1/series/chapters/get",
-                headers,
-                FormBody.Builder()
-                    .add("workId", workId)
-                    .add("limit", pageLimit.toString())
-                    .add("page", (page++).toString())
-                    .build(),
-            )
-            val nextChapters = client.newCall(request).execute().use { res ->
-                if (!res.isSuccessful) throw Exception("HTTP ${res.code}")
-                res.parseAs<WChapters>()
-            }
+        val seen = mutableSetOf<String>()
+        return chapterLinks.mapNotNull { link ->
+            val href = link.attr("href")
+            if (href.isBlank() || !seen.add(href)) return@mapNotNull null
 
-            chapters.addAll(nextChapters.chapters)
+            val chapterNum = href.substringAfterLast("/")
 
-            if (nextChapters.chapters.size < pageLimit || !nextChapters.success) break
-        }
-
-        return chapters.map { chapter ->
             SChapter.create().apply {
-                url = "/series/$workId/${chapter.chapter}"
-                name = buildString {
-                    append("الفصل ${chapter.chapter.toString().removeSuffix(".0")}")
-                    chapter.title?.let {
-                        append(" - $it")
-                    }
-                }
-                date_upload = dateFormat.tryParse(chapter.postTime)
-                    .takeIf { it != 0L }
-                    ?: oldDateFormat.tryParse(chapter.postTime)
+                name = link.text().ifBlank { "الفصل $chapterNum" }
+                setUrlWithoutDomain(href)
+                chapter_number = chapterNum.toFloatOrNull() ?: 0f
             }
         }
     }
 
-    // Pages
-    override fun pageListRequest(chapter: SChapter): Request = GET(baseUrl + chapter.url, rscHeaders)
+    // --- Pages ---
 
     override fun pageListParse(response: Response): List<Page> {
-        val basePages = response.extractNextJs<WPage>()!!
+        val document = response.asJsoup()
+        val images = document.select("img[src]")
 
-        val pages: List<WImagePayload> = basePages.images.map { encoded ->
-            val decodedJson = Base64.decode(encoded.substringBefore(".")).decodeToString()
-            decodedJson.parseAs<WImagePayload>()
-        }
-
-        return pages.mapIndexed { index, image ->
-            Page(index, "", image.url.toImage())
+        return images.mapIndexedNotNull { i, img ->
+            val url = img.imgAttr()
+            if (url.isBlank() || url.contains("logo", ignoreCase = true) || url.contains("icon", ignoreCase = true)) {
+                null
+            } else {
+                Page(i, imageUrl = url)
+            }
         }
     }
 
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
-
-    private fun Int?.toStatus() = when (this) {
-        0 -> SManga.ONGOING
-        1 -> SManga.COMPLETED
-        2 -> SManga.ON_HIATUS
-        else -> SManga.UNKNOWN
-    }
-
-    fun String.toImage(): String {
-        val t = this.replace(" ", "%20")
-        return when {
-            this.startsWith("http") -> t
-            this.startsWith("projects") ||
-                this.startsWith("series") ||
-                this.startsWith("users") -> "$cloudUrl/$t"
-            else ->
-                "$baseUrl/$t"
-        }
-    }
-
-    private fun WManga.toSManga(): SManga = SManga.create().apply {
-        url = "/series/$postId"
-        title = this@toSManga.title
-        thumbnail_url = imageUrl.toImage()
-    }
-
-    @Serializable
-    class WManga(
-        val postId: Long,
-        val title: String,
-        val imageUrl: String,
-    )
-
-    @Serializable
-    class WLatestManga(
-        val chapters: List<WManga>,
-        val isLastPage: Boolean,
-    )
-
-    @Serializable
-    class WMangaDetails(
-        val name: String,
-        val cover: String,
-        val story: String?,
-        val status: Int?,
-        val type: String?,
-        val genre: List<String>,
-        val artist: String?,
-        val author: String?,
-    )
-
-    @Serializable
-    class WChapters(
-        val chapters: List<WChapterList>,
-        val success: Boolean,
-    )
-
-    @Serializable
-    class WChapterList(
-        val title: String?,
-        val chapter: Double,
-        val postTime: String?,
-    )
-
-    @Serializable
-    class WPage(
-        val images: List<String>,
-    )
-
-    @Serializable
-    class WImagePayload(
-        @SerialName("p")
-        val url: String,
-    )
 }
