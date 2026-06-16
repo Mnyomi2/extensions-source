@@ -15,12 +15,6 @@ name: Build ALL repo
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - 'src/all/**'
-      - '.github/workflows/build_all_repo.yml'
 
 permissions:
   contents: write   # needed to push the repo-all branch via GITHUB_TOKEN
