@@ -1,36 +1,22 @@
 package eu.kanade.tachiyomi.extension.ar.mangasid
 
 import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.network.POST
+import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.network.rateLimit
-import keiyoushi.utils.extractNextJs
-import keiyoushi.utils.parseAs
-import keiyoushi.utils.tryParse
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
-import okhttp3.FormBody
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import java.text.SimpleDateFormat
-import java.util.Locale
-import kotlin.io.encoding.Base64
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
+import rx.Observable
 import kotlin.time.Duration.Companion.seconds
-import eu.kanade.tachiyomi.network.POST
-import keiyoushi.utils.extractNextJs
-import keiyoushi.utils.parseAs
-import keiyoushi.utils.tryParse
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
-import okhttp3.FormBody
-import java.text.SimpleDateFormat
-import java.util.Locale
-import kotlin.io.encoding.Base64
 
 class Mangasid : HttpSource() {
     override val name = "Mangasid"
@@ -74,7 +60,10 @@ class Mangasid : HttpSource() {
     override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/manga-list?sort=views&page=$page", headers)
 
     override fun popularMangaParse(response: Response): MangasPage {
-        val document = response.asJsoup()
+        return popularMangaParse(response.asJsoup())
+    }
+
+    private fun popularMangaParse(document: Document): MangasPage {
         val cards = document.select("div.manga-card")
 
         val mangas = cards.map { card ->
@@ -98,8 +87,7 @@ class Mangasid : HttpSource() {
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/manga-list?page=$page", headers)
 
     override fun latestUpdatesParse(response: Response): MangasPage {
-        fetchFiltersIfNeeded(response.asJsoup())
-        return popularMangaParse(response)
+        return popularMangaParse(response.asJsoup())
     }
 
     // --- Search ---
@@ -181,17 +169,16 @@ class Mangasid : HttpSource() {
             selectedStatus?.let { url.addQueryParameter("status", it) }
         }
 
-        return GET(url.build(), headers)
+        return GET(url.build().toString(), headers)
     }
 
     override fun searchMangaParse(response: Response): MangasPage {
-        fetchFiltersIfNeeded(response.asJsoup())
-        return popularMangaParse(response)
+        return popularMangaParse(response.asJsoup())
     }
 
     // --- Filters ---
 
-    private fun fetchFiltersIfNeeded(document: org.jsoup.nodes.Document) {
+    private fun fetchFiltersIfNeeded(document: Document) {
         if (filtersLoaded) return
 
         genreNames.clear()
