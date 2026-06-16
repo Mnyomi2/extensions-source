@@ -50,14 +50,31 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Generate signing key
+      - name: Load or generate signing key
         run: |
-          keytool -genkey -v \
-            -keystore signingkey.jks \
-            -alias key0 \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android \
-            -dname "CN=EN Repo, OU=CI, O=CI, L=CI, S=CI, C=US"
+          if [ -f "signingkey/signingkey.jks" ]; then
+            echo "Using existing signing key from repository."
+            cp signingkey/signingkey.jks signingkey.jks
+          else
+            echo "No signing key found. Generating a new one..."
+            mkdir -p signingkey
+            
+            keytool -genkey -v \
+              -keystore signingkey.jks \
+              -alias key0 \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android -keypass android \
+              -dname "CN=Extension Repo, OU=CI, O=CI, L=CI, S=CI, C=US"
+              
+            cp signingkey.jks signingkey/signingkey.jks
+            
+            # Configure git and force-add the ignored signing key
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -f signingkey/signingkey.jks
+            git commit -m "chore: persist signing key [skip ci]"
+            git push origin main
+          fi
 
       - name: Discover EN modules
         id: modules
