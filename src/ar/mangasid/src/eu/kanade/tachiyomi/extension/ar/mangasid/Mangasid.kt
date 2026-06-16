@@ -49,8 +49,8 @@ class Mangasid : HttpSource() {
         }
 
         val nextPageElement = document.selectFirst("nav a:contains(الصفحة التالية), nav a:has(i.fa-chevron-left)")
-        val hasNextPage = nextPageElement != null && 
-            nextPageElement.attr("href").isNotEmpty() && 
+        val hasNextPage = nextPageElement != null &&
+            nextPageElement.attr("href").isNotEmpty() &&
             nextPageElement.attr("aria-disabled") != "true"
 
         return MangasPage(mangas, hasNextPage)
@@ -70,11 +70,11 @@ class Mangasid : HttpSource() {
     // Search
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         val url = "$baseUrl/manga-list".toHttpUrl().newBuilder()
-        
+
         if (query.isNotEmpty()) {
             url.addQueryParameter("search", query)
         }
-        
+
         url.addQueryParameter("page", page.toString())
 
         // Apply filters
@@ -113,7 +113,7 @@ class Mangasid : HttpSource() {
         title = document.selectFirst("h1")?.text()?.trim() ?: ""
         thumbnail_url = document.selectFirst("img[src*=cover], img[src*=covers], img[alt=$title]")?.attr("abs:src")
             ?: document.selectFirst("img")?.attr("abs:src")
-        
+
         description = document.select("p.text-gray-300, p.text-muted-foreground, .story, #story, .description")
             .joinToString("\n") { it.text().trim() }
             .takeIf { it.isNotEmpty() }
@@ -161,10 +161,10 @@ class Mangasid : HttpSource() {
     // Pages
     override fun pageListParse(response: Response): List<Page> {
         val document = response.asJsoup()
-        
+
         // Select standard reader layout image elements
         val imageElements = document.select("div.reader-images img, div.reader-container img, div.reader img, .reader-image-container img, img.reader-img")
-        
+
         if (imageElements.isNotEmpty()) {
             return imageElements.mapIndexed { index, img ->
                 val imageUrl = img.attr("abs:data-src").takeIf { it.isNotEmpty() }
@@ -172,7 +172,7 @@ class Mangasid : HttpSource() {
                 Page(index, "", imageUrl)
             }
         }
-        
+
         // Fallback for scripts declaring static image lists (if hydrated asynchronously)
         val scriptContent = document.select("script").html()
         val urlRegex = """https?://[^"\s]+\.(?:jpg|jpeg|png|webp|gif)""".toRegex()
@@ -181,7 +181,7 @@ class Mangasid : HttpSource() {
             .filterNot { it.contains("logo") || it.contains("avatar") || it.contains("cover") }
             .distinct()
             .toList()
-            
+
         if (foundUrls.isNotEmpty()) {
             return foundUrls.mapIndexed { index, url ->
                 Page(index, "", url)
