@@ -1,9 +1,0 @@
-ext {
-    extName = 'Manga Sid'
-    extClass = '.Mangasid'
-    baseUrl = 'https://mangasid.com'
-    extVersionCode = 1
-    isNsfw = false
-}
-
-apply plugin: "kei.plugins.extension.legacy"
