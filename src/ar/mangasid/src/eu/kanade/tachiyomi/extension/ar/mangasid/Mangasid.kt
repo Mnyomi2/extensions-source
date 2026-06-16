@@ -24,7 +24,9 @@ import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import kotlin.time.Duration.Companion.seconds
 
-class Mangasid : HttpSource(), ConfigurableSource {
+class Mangasid :
+    HttpSource(),
+    ConfigurableSource {
     override val name = "Mangasid"
 
     override val baseUrl: String
