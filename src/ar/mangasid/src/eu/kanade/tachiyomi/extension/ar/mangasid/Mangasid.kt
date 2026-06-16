@@ -1,7 +1,6 @@
 package eu.kanade.tachiyomi.extension.ar.mangasid
 
 import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -58,8 +57,7 @@ class Mangasid : HttpSource() {
 
     // --- Popular ---
 
-    override fun popularMangaRequest(page: Int): Request =
-        GET("$baseUrl/manga-list?sort=views&page=$page", headers)
+    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/manga-list?sort=views&page=$page", headers)
 
     override fun popularMangaParse(response: Response): MangasPage {
         val document = response.asJsoup()
@@ -83,8 +81,7 @@ class Mangasid : HttpSource() {
 
     // --- Latest ---
 
-    override fun latestUpdatesRequest(page: Int): Request =
-        GET("$baseUrl/manga-list?page=$page", headers)
+    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/manga-list?page=$page", headers)
 
     override fun latestUpdatesParse(response: Response): MangasPage {
         fetchFiltersIfNeeded(response.asJsoup())
@@ -219,10 +216,11 @@ class Mangasid : HttpSource() {
         )
     }
 
-    private class SortFilter : Filter.Select<String>(
-        "الترتيب",
-        arrayOf("الأحدث", "الأكثر شعبية", "أ-ي"),
-    ) {
+    private class SortFilter :
+        Filter.Select<String>(
+            "الترتيب",
+            arrayOf("الأحدث", "الأكثر شعبية", "أ-ي"),
+        ) {
         fun toSortParam(): Pair<String, String?> = when (state) {
             0 -> "latest" to null
             1 -> "views" to null
@@ -231,19 +229,21 @@ class Mangasid : HttpSource() {
         }
     }
 
-    private class StatusFilter(vals: List<String>) : Filter.Select<String>(
-        "الحالة",
-        vals.toTypedArray().ifEmpty { arrayOf(ALL) },
-    ) {
+    private class StatusFilter(vals: List<String>) :
+        Filter.Select<String>(
+            "الحالة",
+            vals.toTypedArray().ifEmpty { arrayOf(ALL) },
+        ) {
         companion object {
             const val ALL = "الكل"
         }
     }
 
-    private class GenreFilter(vals: List<String>) : Filter.Select<String>(
-        "التصنيفات",
-        (listOf(ALL) + vals).toTypedArray(),
-    ) {
+    private class GenreFilter(vals: List<String>) :
+        Filter.Select<String>(
+            "التصنيفات",
+            (listOf(ALL) + vals).toTypedArray(),
+        ) {
         companion object {
             const val ALL = "الكل"
         }
@@ -315,6 +315,5 @@ class Mangasid : HttpSource() {
         }
     }
 
-    override fun imageUrlParse(response: Response): String =
-        throw UnsupportedOperationException()
+    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
 }
