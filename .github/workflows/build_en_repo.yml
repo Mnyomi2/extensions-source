@@ -15,12 +15,6 @@ name: Build EN repo
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - 'src/en/**'
-      - '.github/workflows/build_en_repo.yml'
 
 permissions:
   contents: write   # needed to push the repo-en branch via GITHUB_TOKEN
