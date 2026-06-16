@@ -258,12 +258,15 @@ class Mangasid :
         val baseUrlPref = EditTextPreference(screen.context).apply {
             key = BASE_URL_PREF_KEY
             title = BASE_URL_PREF_TITLE
-            summary = "الحالي: %s"
+            val currentVal = preferences.getString(BASE_URL_PREF_KEY, BASE_URL_PREF_DEFAULT) ?: BASE_URL_PREF_DEFAULT
+            summary = "الحالي: $currentVal"
             setDefaultValue(BASE_URL_PREF_DEFAULT)
             dialogTitle = BASE_URL_PREF_TITLE
 
             setOnPreferenceChangeListener { _, newValue ->
-                preferences.edit().putString(BASE_URL_PREF_KEY, newValue as String).commit()
+                val value = newValue as String
+                summary = "الحالي: $value"
+                preferences.edit().putString(BASE_URL_PREF_KEY, value).commit()
             }
         }
 
