@@ -1,0 +1,149 @@
+name: Build Test repo
+
+# Self-contained pipeline (no PAT / no repo secrets required):
+#   1. Builds every test/test extension as a signed release APK
+#      (signing key is generated on the fly inside the runner).
+#   2. Uses the keiyoushi Inspector to extract source metadata.
+#   3. Generates index.min.json + index.json + icons.
+#   4. Publishes everything to the "repo-test" branch of THIS repository
+#      using the built-in GITHUB_TOKEN.
+#
+# After it runs, add this URL as an extension source in your app:
+#   https://raw.githubusercontent.com/<OWNER>/<REPO>/repo-test/index.min.json
+#
+# Trigger: manually (Actions -> Build Test repo -> Run workflow) or on push to main.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'test/test/**'
+      - '.github/workflows/build_test_repo.yml'
+
+permissions:
+  contents: write   # needed to push the repo-test branch via GITHUB_TOKEN
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Test extensions and publish repo
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: true   # keep token for the final push
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Generate signing key
+        run: |
+          keytool -genkey -v \
+            -keystore signingkey.jks \
+            -alias key0 \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Test Repo, OU=CI, O=CI, L=CI, S=CI, C=US"
+
+      - name: Discover Test modules
+        id: modules
+        run: |
+          tasks=""
+          for d in test/test/*/; do
+            name="$(basename "$d")"
+            if [ -f "${d}build.gradle" ] || [ -f "${d}build.gradle.kts" ]; then
+              tasks="$tasks :test:test:${name}:assembleRelease"
+            fi
+          done
+          echo "Discovered:$tasks"
+          echo "tasks=$tasks" >> "$GITHUB_OUTPUT"
+
+      - name: Build Test extensions (assembleRelease)
+        env:
+          ALIAS: key0
+          KEY_STORE_PASSWORD: android
+          KEY_PASSWORD: android
+        run: |
+          chmod +x gradlew
+          ./gradlew ${{ steps.modules.outputs.tasks }} --stacktrace
+
+      - name: Collect APKs
+        run: |
+          mkdir -p repo/apk
+          find test/test -path '*/build/outputs/apk/*/*.apk' | while read -r apk; do
+            base="$(basename "$apk")"
+            # normalise: tachiyomi-test.foo-v1.2.3-release.apk -> tachiyomi-test.foo-v1.2.3.apk
+            dest="${base/-release.apk/.apk}"
+            cp -v "$apk" "repo/apk/$dest"
+          done
+          echo "=== APKs ==="; ls -lh repo/apk/
+
+      - name: Run Inspector (extract source metadata)
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+        run: |
+          INSPECTOR_LINK="$(curl -s 'https://api.github.com/repos/keiyoushi/extensions-inspector/releases/latest' | jq -r '.assets[0].browser_download_url')"
+          echo "Inspector: $INSPECTOR_LINK"
+          curl -L "$INSPECTOR_LINK" -o Inspector.jar
+          java -jar Inspector.jar "repo/apk" "output.json" "tmp"
+          echo "=== output.json (head) ==="; head -c 600 output.json; echo
+
+      - name: Generate index.min.json + icons
+        run: |
+          python ./.github/scripts/create-repo.py
+          # also provide a pretty index.json for convenience
+          python - <<'PY'
+          import json
+          data = json.load(open("repo/index.min.json", encoding="utf-8"))
+          json.dump(data, open("repo/index.json","w",encoding="utf-8"),
+                    ensure_ascii=False, indent=2)
+          print(f"Indexed {len(data)} extensions")
+          PY
+          ls -R repo | head -40
+
+      - name: Publish to repo-test branch
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Work in a clean worktree for the repo-test branch
+          mkdir -p /tmp/publish
+          cp -r repo/* /tmp/publish/
+
+          # Reset local changes and clean untracked files to avoid checkout conflicts
+          git reset --hard
+          git clean -fd
+
+          git fetch origin repo-test || true
+          if git show-ref --verify --quiet refs/remotes/origin/repo-test; then
+            git checkout -B repo-test origin/repo-test
+          else
+            git checkout --orphan repo-test
+            git rm -rf . >/dev/null 2>&1 || true
+          fi
+
+          # replace contents
+          rm -rf apk icon index.json index.min.json
+          cp -r /tmp/publish/* .
+
+          git add apk icon index.json index.min.json
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "Update Test extensions repo"
+            git push origin repo-test
+          else
+            echo "No changes to publish."
+          fi
