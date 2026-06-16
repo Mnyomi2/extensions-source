@@ -13,308 +13,272 @@ import keiyoushi.network.rateLimit
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
-import rx.Observable
 import kotlin.time.Duration.Companion.seconds
 
 class Mangasid : HttpSource() {
     override val name = "Mangasid"
     override val baseUrl = "https://mangasid.com"
-
     override val lang = "ar"
-
     override val supportsLatest = true
 
-    override val client = network.client
-        .newBuilder()
-        .connectTimeout(15.seconds)
-        .readTimeout(30.seconds)
-        .rateLimit(10, 1.seconds)
+    override val client = network.client.newBuilder()
+        .rateLimit(2, 1.seconds)
         .build()
 
     override fun headersBuilder() = super.headersBuilder()
-        .add("Referer", "$baseUrl/")
+        .set("Referer", "$baseUrl/")
 
-    private var filtersLoaded = false
-
-    private val genreNames: MutableList<String> = mutableListOf()
-    private val statusNames: MutableList<String> = mutableListOf()
-
-    private fun Element.imgAttr(): String = when {
-        hasAttr("data-src") -> attr("abs:data-src")
-        hasAttr("src") -> attr("abs:src")
-        else -> ""
+    // Popular
+    override fun popularMangaRequest(page: Int): Request {
+        val url = "$baseUrl/manga-list".toHttpUrl().newBuilder()
+            .addQueryParameter("sort", "views")
+            .addQueryParameter("page", page.toString())
+            .build()
+        return GET(url, headers)
     }
-
-    private fun String?.toStatus(): Int = when {
-        this == null -> SManga.UNKNOWN
-        contains("مستمر", ignoreCase = true) -> SManga.ONGOING
-        contains("مكتمل", ignoreCase = true) -> SManga.COMPLETED
-        contains("متوقف", ignoreCase = true) -> SManga.ON_HIATUS
-        else -> SManga.UNKNOWN
-    }
-
-    // --- Popular ---
-
-    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/manga-list?sort=views&page=$page", headers)
 
     override fun popularMangaParse(response: Response): MangasPage {
-        return popularMangaParse(response.asJsoup())
-    }
-
-    private fun popularMangaParse(document: Document): MangasPage {
-        val cards = document.select("div.manga-card")
-
-        val mangas = cards.map { card ->
+        val document = response.asJsoup()
+        val mangas = document.select("div.manga-card").map { element ->
             SManga.create().apply {
-                val link = card.selectFirst("h3 a")!!
-                title = link.text()
-                setUrlWithoutDomain(link.attr("href"))
-                thumbnail_url = card.selectFirst("img")?.imgAttr()
+                val titleEl = element.selectFirst("h3 a") ?: element.selectFirst("h3")
+                title = titleEl?.text()?.trim() ?: ""
+                url = element.selectFirst("a")?.attr("href") ?: ""
+                thumbnail_url = element.selectFirst("img")?.attr("abs:src")
             }
         }
 
-        val hasNextPage = document.selectFirst("nav a:last-child:not([aria-disabled=true])") != null
-
-        fetchFiltersIfNeeded(document)
+        val nextPageElement = document.selectFirst("nav a:contains(الصفحة التالية), nav a:has(i.fa-chevron-left)")
+        val hasNextPage = nextPageElement != null && 
+            nextPageElement.attr("href").isNotEmpty() && 
+            nextPageElement.attr("aria-disabled") != "true"
 
         return MangasPage(mangas, hasNextPage)
     }
 
-    // --- Latest ---
-
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/manga-list?page=$page", headers)
-
-    override fun latestUpdatesParse(response: Response): MangasPage {
-        return popularMangaParse(response.asJsoup())
+    // Latest
+    override fun latestUpdatesRequest(page: Int): Request {
+        val url = "$baseUrl/manga-list".toHttpUrl().newBuilder()
+            .addQueryParameter("sort", "latest")
+            .addQueryParameter("page", page.toString())
+            .build()
+        return GET(url, headers)
     }
 
-    // --- Search ---
+    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
 
-    override fun fetchSearchManga(
-        page: Int,
-        query: String,
-        filters: FilterList,
-    ): Observable<MangasPage> {
-        if (query.startsWith("http")) {
-            val baseHost = baseUrl.toHttpUrl().host
-            val seriesUrl = query.toHttpUrl()
-
-            if (seriesUrl.host != baseHost) throw Exception("Unsupported URL")
-
-            val manga = SManga.create().apply { url = seriesUrl.encodedPath }
-
-            return fetchMangaDetails(manga)
-                .map {
-                    MangasPage(
-                        listOf(
-                            it.apply {
-                                url = manga.url
-                                initialized = true
-                            },
-                        ),
-                        false,
-                    )
-                }
-        }
-
-        return super.fetchSearchManga(page, query, filters)
-    }
-
+    // Search
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        val url = baseUrl.toHttpUrl().newBuilder()
-            .addPathSegment("manga-list")
-
-        if (query.isNotBlank()) {
+        val url = "$baseUrl/manga-list".toHttpUrl().newBuilder()
+        
+        if (query.isNotEmpty()) {
             url.addQueryParameter("search", query)
         }
+        
+        url.addQueryParameter("page", page.toString())
 
-        if (page > 1) {
-            url.addQueryParameter("page", page.toString())
-        }
-
-        if (query.isBlank()) {
-            var sortParam: String? = null
-            var sortOrder: String? = null
-            val selectedGenres = mutableListOf<String>()
-            var selectedStatus: String? = null
-
-            for (filter in filters) {
-                when (filter) {
-                    is SortFilter -> {
-                        val (sort, order) = filter.toSortParam()
-                        sortParam = sort
-                        sortOrder = order
+        // Apply filters
+        val genresList = mutableListOf<String>()
+        filters.forEach { filter ->
+            when (filter) {
+                is SortFilter -> {
+                    url.addQueryParameter("sort", filter.toUriValue())
+                    if (filter.toUriValue() == "title") {
+                        url.addQueryParameter("sortOrder", "ASC")
                     }
-                    is GenreFilter -> {
-                        val selected = filter.values[filter.state]
-                        if (selected != GenreFilter.ALL) {
-                            selectedGenres.add(selected)
-                        }
-                    }
-                    is StatusFilter -> {
-                        val selected = filter.values[filter.state]
-                        if (selected != StatusFilter.ALL) {
-                            selectedStatus = selected
-                        }
-                    }
-                    else -> {}
                 }
+                is GenreList -> {
+                    filter.state.forEach { genre ->
+                        if (genre.state) {
+                            genresList.add(genre.name)
+                        }
+                    }
+                }
+                else -> {}
             }
-
-            sortParam?.let { url.addQueryParameter("sort", it) }
-            if (sortOrder != null) url.addQueryParameter("sortOrder", sortOrder)
-            if (selectedGenres.isNotEmpty()) url.addQueryParameter("genres", selectedGenres.joinToString(","))
-            selectedStatus?.let { url.addQueryParameter("status", it) }
         }
 
-        return GET(url.build().toString(), headers)
-    }
-
-    override fun searchMangaParse(response: Response): MangasPage {
-        return popularMangaParse(response.asJsoup())
-    }
-
-    // --- Filters ---
-
-    private fun fetchFiltersIfNeeded(document: Document) {
-        if (filtersLoaded) return
-
-        genreNames.clear()
-        document.select("aside.filter-sidebar div.mb-4:has(h4:contains(التصنيفات)) button")
-            .mapNotNull { it.text().trim().takeIf { t -> t.isNotBlank() } }
-            .forEach { genreNames.add(it) }
-
-        statusNames.clear()
-        document.select("aside.filter-sidebar div.mb-6:has(h4:contains(الحالة)) button")
-            .mapNotNull { it.text().trim().takeIf { t -> t.isNotBlank() } }
-            .forEach { statusNames.add(it) }
-
-        if (genreNames.isNotEmpty() || statusNames.isNotEmpty()) {
-            filtersLoaded = true
-        }
-    }
-
-    override fun getFilterList(): FilterList {
-        if (!filtersLoaded) {
-            return FilterList(
-                Filter.Header(
-                    "الرجاء فتح قائمة المانجا الشعبية أو الأحدث\n" +
-                        "لتحميل خيارات التصفية",
-                ),
-            )
+        if (genresList.isNotEmpty()) {
+            url.addQueryParameter("genres", genresList.joinToString(","))
         }
 
-        return FilterList(
-            Filter.Header("ملاحظة: التصفية لا تعمل مع البحث النصي"),
-            Filter.Separator(),
-            SortFilter(),
-            Filter.Separator(),
-            StatusFilter(statusNames),
-            Filter.Separator(),
-            GenreFilter(genreNames),
-        )
+        return GET(url.build(), headers)
     }
 
-    private class SortFilter :
-        Filter.Select<String>(
-            "الترتيب",
-            arrayOf("الأحدث", "الأكثر شعبية", "أ-ي"),
-        ) {
-        fun toSortParam(): Pair<String, String?> = when (state) {
-            0 -> "latest" to null
-            1 -> "views" to null
-            2 -> "title" to "ASC"
-            else -> "latest" to null
-        }
-    }
+    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
 
-    private class StatusFilter(vals: List<String>) :
-        Filter.Select<String>(
-            "الحالة",
-            vals.toTypedArray().ifEmpty { arrayOf(ALL) },
-        ) {
-        companion object {
-            const val ALL = "الكل"
-        }
-    }
-
-    private class GenreFilter(vals: List<String>) :
-        Filter.Select<String>(
-            "التصنيفات",
-            (listOf(ALL) + vals).toTypedArray(),
-        ) {
-        companion object {
-            const val ALL = "الكل"
-        }
-    }
-
-    // --- Details ---
-
-    override fun mangaDetailsParse(response: Response): SManga {
+    // Manga Details
+    override fun mangaDetailsParse(response: Response): SManga = SManga.create().apply {
         val document = response.asJsoup()
+        title = document.selectFirst("h1")?.text()?.trim() ?: ""
+        thumbnail_url = document.selectFirst("img[src*=cover], img[src*=covers], img[alt=$title]")?.attr("abs:src")
+            ?: document.selectFirst("img")?.attr("abs:src")
+        
+        description = document.select("p.text-gray-300, p.text-muted-foreground, .story, #story, .description")
+            .joinToString("\n") { it.text().trim() }
+            .takeIf { it.isNotEmpty() }
 
-        return SManga.create().apply {
-            title = document.selectFirst("h1")?.text() ?: ""
+        genre = document.select("a[href*=genres=], span.bg-secondary, span.bg-primary/20, .genre-badge")
+            .map { it.text().trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString(", ")
 
-            description = document.selectFirst(
-                "p.text-gray-300, div.description, .description p, div.summary, .summary p",
-            )?.text()
-
-            thumbnail_url = document.selectFirst("img[class*='rounded'], main img, div.flex img")?.imgAttr()
-                ?: document.selectFirst("img")?.imgAttr()
-
-            val statusText = document.selectFirst(
-                "span:contains(مستمر), span:contains(مكتمل), span:contains(متوقف)",
-            )?.text()
-            status = statusText.toStatus()
-
-            genre = document.select(
-                "a[class*=bg-], span[class*=bg-]",
-            ).mapNotNull { element ->
-                element.text().trim().takeIf { it.isNotBlank() && it.length < 20 }
-            }.takeIf { it.isNotEmpty() }?.joinToString(", ")
+        val statusText = document.text()
+        status = when {
+            statusText.contains("مستمر") -> SManga.ONGOING
+            statusText.contains("مكتمل") -> SManga.COMPLETED
+            statusText.contains("متوقف") -> SManga.ON_HIATUS
+            else -> SManga.UNKNOWN
         }
+
+        author = document.selectFirst("*:contains(المؤلف) + *, *:contains(الكاتب) + *, .author-class")?.text()?.trim()
+        artist = document.selectFirst("*:contains(الرسام) + *, .artist-class")?.text()?.trim()
     }
 
-    // --- Chapters ---
-
+    // Chapters
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = response.asJsoup()
-
-        val chapterLinks = document.select("a[href*=\"/reader/\"]")
-
-        val seen = mutableSetOf<String>()
-        return chapterLinks.mapNotNull { link ->
-            val href = link.attr("href")
-            if (href.isBlank() || !seen.add(href)) return@mapNotNull null
-
-            val chapterNum = href.substringAfterLast("/")
-
+        val chapters = document.select("a[href*=/reader/]").map { element ->
             SChapter.create().apply {
-                name = link.text().ifBlank { "الفصل $chapterNum" }
-                setUrlWithoutDomain(href)
-                chapter_number = chapterNum.toFloatOrNull() ?: 0f
+                url = element.attr("href")
+                name = element.text().trim()
+                date_upload = parseChapterDate(element.parent()?.text() ?: "")
             }
+        }
+        return chapters.distinctBy { it.url }
+    }
+
+    private fun parseChapterDate(dateStr: String): Long {
+        val cleanDate = dateStr.lowercase()
+        return when {
+            cleanDate.contains("منذ قليل") || cleanDate.contains("الآن") -> System.currentTimeMillis()
+            cleanDate.contains("اليوم") -> System.currentTimeMillis()
+            cleanDate.contains("أمس") -> System.currentTimeMillis() - 86400000L
+            else -> 0L
         }
     }
 
-    // --- Pages ---
-
+    // Pages
     override fun pageListParse(response: Response): List<Page> {
         val document = response.asJsoup()
-        val images = document.select("img[src]")
-
-        return images.mapIndexedNotNull { i, img ->
-            val url = img.imgAttr()
-            if (url.isBlank() || url.contains("logo", ignoreCase = true) || url.contains("icon", ignoreCase = true)) {
-                null
-            } else {
-                Page(i, imageUrl = url)
+        
+        // Select standard reader layout image elements
+        val imageElements = document.select("div.reader-images img, div.reader-container img, div.reader img, .reader-image-container img, img.reader-img")
+        
+        if (imageElements.isNotEmpty()) {
+            return imageElements.mapIndexed { index, img ->
+                val imageUrl = img.attr("abs:data-src").takeIf { it.isNotEmpty() }
+                    ?: img.attr("abs:src")
+                Page(index, "", imageUrl)
             }
         }
+        
+        // Fallback for scripts declaring static image lists (if hydrated asynchronously)
+        val scriptContent = document.select("script").html()
+        val urlRegex = """https?://[^"\s]+\.(?:jpg|jpeg|png|webp|gif)""".toRegex()
+        val foundUrls = urlRegex.findAll(scriptContent)
+            .map { it.value }
+            .filterNot { it.contains("logo") || it.contains("avatar") || it.contains("cover") }
+            .distinct()
+            .toList()
+            
+        if (foundUrls.isNotEmpty()) {
+            return foundUrls.mapIndexed { index, url ->
+                Page(index, "", url)
+            }
+        }
+
+        throw Exception("لم يتم العثور على صفحات لهذا الفصل.")
     }
 
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
+
+    // Filters
+    class Genre(name: String) : Filter.CheckBox(name)
+
+    class GenreList(genres: List<Genre>) : Filter.Group<Genre>("التصنيفات", genres)
+
+    class SortFilter : Filter.Select<String>(
+        "الترتيب",
+        arrayOf("الأحدث", "الأكثر شعبية", "أ-ي"),
+    ) {
+        fun toUriValue() = when (state) {
+            0 -> "latest"
+            1 -> "views"
+            2 -> "title"
+            else -> "latest"
+        }
+    }
+
+    override fun getFilterList() = FilterList(
+        SortFilter(),
+        GenreList(getGenres())
+    )
+
+    private fun getGenres() = listOf(
+        Genre("دراما"),
+        Genre("أكشن"),
+        Genre("خيال"),
+        Genre("فانتازيا"),
+        Genre("مغامرة"),
+        Genre("رومانسي"),
+        Genre("كوميدي"),
+        Genre("إثارة"),
+        Genre("شوجو"),
+        Genre("رومانسى"),
+        Genre("شونين"),
+        Genre("مانهوا"),
+        Genre("فنون قتال"),
+        Genre("غموض"),
+        Genre("سحر"),
+        Genre("قوة خارقة"),
+        Genre("تاريخي"),
+        Genre("حياة مدرسية"),
+        Genre("بطل غير اعتيادي"),
+        Genre("ويب تون"),
+        Genre("وحوش"),
+        Genre("نظام"),
+        Genre("خارق للطبيعة"),
+        Genre("الحياة اليومية"),
+        Genre("إيسيكاي"),
+        Genre("تناسخ"),
+        Genre("السفر عبر الزمن"),
+        Genre("مانجا"),
+        Genre("دموي"),
+        Genre("جوسيه"),
+        Genre("سينين"),
+        Genre("شياطين"),
+        Genre("اعادة احياء"),
+        Genre("نفسي"),
+        Genre("تشويق"),
+        Genre("صقل"),
+        Genre("رعب"),
+        Genre("إنتقام"),
+        Genre("موريم"),
+        Genre("حديث"),
+        Genre("شريحة من الحياة"),
+        Genre("حريم"),
+        Genre("ثأر"),
+        Genre("تجسيد"),
+        Genre("عنف"),
+        Genre("الخيال العلمي"),
+        Genre("عائلى"),
+        Genre("حرب"),
+        Genre("مأساة"),
+        Genre("تراجيدي"),
+        Genre("ملائكة"),
+        Genre("داخل لعبة"),
+        Genre("رياضه"),
+        Genre("قتال"),
+        Genre("خارق"),
+        Genre("زنزانات"),
+        Genre("عالم مختلف"),
+        Genre("لعبه"),
+        Genre("النجاة"),
+        Genre("جريمة"),
+        Genre("كوميك"),
+        Genre("العاب"),
+        Genre("أكاديمية"),
+        Genre("نهاية العالم")
+    )
 }
