@@ -15,12 +15,6 @@ name: Build AR repo
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - 'src/ar/**'
-      - '.github/workflows/build_ar_repo.yml'
 
 permissions:
   contents: write   # needed to push the repo-ar branch via GITHUB_TOKEN
