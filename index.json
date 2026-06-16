@@ -493,6 +493,23 @@
     ]
   },
   {
+    "name": "Tachiyomi: Mangasid",
+    "pkg": "eu.kanade.tachiyomi.extension.ar.mangasid",
+    "apk": "tachiyomi-ar.mangasid-v1.4.1.apk",
+    "lang": "ar",
+    "code": 1,
+    "version": "1.4.1",
+    "nsfw": 0,
+    "sources": [
+      {
+        "name": "Mangasid",
+        "lang": "ar",
+        "id": "6608921293041027058",
+        "baseUrl": "https://waveteamy.com"
+      }
+    ]
+  },
+  {
     "name": "Tachiyomi: Loner Translations",
     "pkg": "eu.kanade.tachiyomi.extension.ar.lonertranslations",
     "apk": "tachiyomi-ar.lonertranslations-v1.4.13.apk",
