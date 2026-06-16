@@ -1,559 +1,411 @@
-package eu.kanade.tachiyomi.extension.all.luscious
+package eu.kanade.tachiyomi.extension.ar.mangasid
 
+import android.app.Application
+import android.content.Context
 import android.content.SharedPreferences
 import androidx.preference.CheckBoxPreference
-import androidx.preference.ListPreference
+import androidx.preference.EditTextPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.network.asObservableSuccess
 import eu.kanade.tachiyomi.source.ConfigurableSource
+import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
-import keiyoushi.utils.getPreferencesLazy
-import keiyoushi.utils.parseAs
-import keiyoushi.utils.toJsonString
-import okhttp3.Headers
-import okhttp3.HttpUrl
+import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.network.rateLimit
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Interceptor
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
-import okhttp3.ResponseBody.Companion.asResponseBody
-import rx.Observable
-import kotlin.math.ceil
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
+import kotlin.time.Duration.Companion.seconds
 
-abstract class Luscious(
-    final override val lang: String,
-) : HttpSource(),
-    ConfigurableSource {
+class Mangasid : HttpSource(), ConfigurableSource {
+    override val name = "Mangasid"
 
-    override val supportsLatest: Boolean = true
-    override val name: String = "Luscious"
-    val lusLang: String = toLusLang(lang)
+    override val baseUrl: String
+        get() = preferences.getString(BASE_URL_PREF_KEY, BASE_URL_PREF_DEFAULT) ?: BASE_URL_PREF_DEFAULT
 
-    private val preferences: SharedPreferences by getPreferencesLazy()
+    override val lang = "ar"
+    override val supportsLatest = true
 
-    override val baseUrl: String = getMirrorPref()!!
+    override val client = network.client.newBuilder()
+        .rateLimit(2, 1.seconds)
+        .build()
 
-    private val apiBaseUrl: String = "$baseUrl/graphql/nobatch/"
-    private val cdnHost: String = "ah-img.luscious.net"
+    private val preferences: SharedPreferences by lazy {
+        Injekt.get<Application>().getSharedPreferences("source_$id", Context.MODE_PRIVATE)
+    }
 
-    override fun headersBuilder(): Headers.Builder = super.headersBuilder()
-        .add("Referer", "$baseUrl/")
+    override fun headersBuilder() = super.headersBuilder()
+        .set("Referer", "$baseUrl/")
 
-    override val client: OkHttpClient
-        get() = network.client.newBuilder()
-            .addNetworkInterceptor(rewriteOctetStream)
+    // Popular
+    override fun popularMangaRequest(page: Int): Request {
+        val url = "$baseUrl/manga-list".toHttpUrl().newBuilder()
+            .addQueryParameter("sort", "views")
+            .addQueryParameter("page", page.toString())
             .build()
+        return GET(url, headers)
+    }
 
-    private val rewriteOctetStream: Interceptor = Interceptor { chain ->
-        val originalResponse: Response = chain.proceed(chain.request())
-        if (originalResponse.headers("Content-Type").contains("application/octet-stream") && originalResponse.request.url.toString()
-                .contains(".webp")
-        ) {
-            val orgBody = originalResponse.body.source()
-            val newBody = orgBody.asResponseBody("image/webp".toMediaType())
-            originalResponse.newBuilder()
-                .body(newBody)
-                .build()
-        } else {
-            originalResponse
+    override fun popularMangaParse(response: Response): MangasPage {
+        val document = response.asJsoup()
+        val mangas = document.select("div.manga-card").map { element ->
+            SManga.create().apply {
+                val titleEl = element.selectFirst("h3 a") ?: element.selectFirst("h3")
+                title = titleEl?.text()?.trim() ?: ""
+                url = element.selectFirst("a")?.attr("href") ?: ""
+                thumbnail_url = element.selectFirst("img")?.attr("abs:src")
+            }
         }
-    }
 
-    // Common
-    private fun buildAlbumListRequestInput(page: Int, filters: FilterList, query: String = ""): Variables {
-        val sortByFilter = filters.findInstance<SortBySelectFilter>()!!
-        val albumTypeFilter = filters.findInstance<AlbumTypeSelectFilter>()!!
-        val selectionFilter = filters.findInstance<SelectionSelectFilter>()!!
-        val interestsFilter = filters.findInstance<InterestGroupFilter>()!!
-        val languagesFilter = filters.findInstance<LanguageGroupFilter>()!!
-        val tagsFilter = filters.findInstance<TagTextFilters>()!!
-        val creatorFilter = filters.findInstance<CreatorTextFilters>()!!
-        val favoriteFilter = filters.findInstance<FavoriteTextFilters>()!!
-        val genreFilter = filters.findInstance<GenreGroupFilter>()!!
-        val contentTypeFilter = filters.findInstance<ContentTypeSelectFilter>()!!
-        val albumSizeFilter = filters.findInstance<AlbumSizeSelectFilter>()!!
-        val restrictGenresFilter = filters.findInstance<RestrictGenresSelectFilter>()!!
-        return Variables(
-            Input(
-                display = sortByFilter.selected,
-                page = page,
-                itemsPerPage = 50,
-                filters = mutableListOf<Filter>().apply {
-                    if (contentTypeFilter.selected != FILTER_VALUE_IGNORE) {
-                        add(contentTypeFilter.toJsonObject("content_id"))
-                    }
+        val nextPageElement = document.selectFirst("nav a:contains(الصفحة التالية), nav a:has(i.fa-chevron-left)")
+        val hasNextPage = nextPageElement != null &&
+            nextPageElement.attr("href").isNotEmpty() &&
+            nextPageElement.attr("aria-disabled") != "true"
 
-                    if (albumTypeFilter.selected != FILTER_VALUE_IGNORE) {
-                        add(albumTypeFilter.toJsonObject("album_type"))
-                    }
-
-                    if (selectionFilter.selected != FILTER_VALUE_IGNORE) {
-                        add(selectionFilter.toJsonObject("selection"))
-                    }
-
-                    if (albumSizeFilter.selected != FILTER_VALUE_IGNORE) {
-                        add(albumSizeFilter.toJsonObject("picture_count_rank"))
-                    }
-
-                    if (restrictGenresFilter.selected != FILTER_VALUE_IGNORE) {
-                        add(restrictGenresFilter.toJsonObject("restrict_genres"))
-                    }
-
-                    with(interestsFilter) {
-                        if (this.selected.isEmpty()) {
-                            throw Exception("Please select an Interest")
-                        }
-                        add(this.toJsonObject("audience_ids"))
-                    }
-
-                    if (lusLang != FILTER_VALUE_IGNORE) {
-                        add(
-                            Filter(name = "language_ids", value = "+" + languagesFilter.selected.joinToString("+")),
-                        )
-                    }
-
-                    if (tagsFilter.state.isNotEmpty()) {
-                        val tags = "+${tagsFilter.state.lowercase()}".replace(" ", "_")
-                            .replace("_,", "+").replace(",_", "+").replace(",", "+")
-                            .replace("+-", "-").replace("-_", "-").trim()
-                        add(
-                            Filter(
-                                name = "tagged",
-                                value = tags,
-                            ),
-                        )
-                    }
-
-                    if (creatorFilter.state.isNotEmpty()) {
-                        add(
-                            Filter(
-                                name = "created_by_id",
-                                value = creatorFilter.state,
-                            ),
-                        )
-                    }
-
-                    if (favoriteFilter.state.isNotEmpty()) {
-                        add(
-                            Filter(
-                                name = "favorite_by_user_id",
-                                value = favoriteFilter.state,
-                            ),
-                        )
-                    }
-
-                    if (genreFilter.anyNotIgnored()) {
-                        add(genreFilter.toJsonObject("genre_ids"))
-                    }
-
-                    if (query != "") {
-                        add(
-                            Filter(
-                                name = "search_query",
-                                value = query,
-                            ),
-                        )
-                    }
-                },
-            ),
-        )
-    }
-
-    private fun buildAlbumListRequest(page: Int, filters: FilterList, query: String = ""): Request {
-        val input = buildAlbumListRequestInput(page, filters, query)
-        val url = apiBaseUrl.toHttpUrl().newBuilder()
-            .addQueryParameter("operationName", "AlbumList")
-            .addQueryParameter("query", ALBUM_LIST_REQUEST_GQL)
-            .addQueryParameter("variables", input.toJsonString())
-            .build()
-        return GET(url, headers)
-    }
-
-    private fun parseAlbumListResponse(response: Response): MangasPage {
-        val data = response.parseAs<AlbumListResponse>()
-        with(data.data.album.list) {
-            return MangasPage(
-                this.items.map {
-                    SManga.create().apply {
-                        url = it.url
-                        title = it.title
-                        thumbnail_url = it.cover.url
-                    }
-                },
-                this.info.hasNextPage,
-            )
-        }
-    }
-
-    private fun buildAlbumInfoRequestInput(id: String): SingleIdVariable = SingleIdVariable(
-        id = id,
-    )
-
-    private fun buildAlbumInfoRequest(id: String): Request {
-        val input = buildAlbumInfoRequestInput(id)
-        val url = apiBaseUrl.toHttpUrl().newBuilder()
-            .addQueryParameter("operationName", "AlbumGet")
-            .addQueryParameter("query", albumInfoQuery)
-            .addQueryParameter("variables", input.toJsonString())
-            .build()
-        return GET(url, headers)
-    }
-
-    private fun buildAlbumListRelatedRequestInput(id: String) = buildAlbumInfoRequestInput(id)
-
-    private fun buildAlbumListRelatedRequest(id: String): Request {
-        val input = buildAlbumListRelatedRequestInput(id)
-        val url = apiBaseUrl.toHttpUrl().newBuilder()
-            .addQueryParameter("operationName", "AlbumListRelated")
-            .addQueryParameter("query", albumListRelatedQuery)
-            .addQueryParameter("variables", input.toJsonString())
-            .build()
-        return GET(url, headers)
+        return MangasPage(mangas, hasNextPage)
     }
 
     // Latest
+    override fun latestUpdatesRequest(page: Int): Request {
+        val url = "$baseUrl/manga-list".toHttpUrl().newBuilder()
+            .addQueryParameter("sort", "latest")
+            .addQueryParameter("page", page.toString())
+            .build()
+        return GET(url, headers)
+    }
 
-    override fun latestUpdatesRequest(page: Int): Request = buildAlbumListRequest(page, getSortFilters(LATEST_DEFAULT_SORT_STATE, lusLang))
+    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
 
-    override fun latestUpdatesParse(response: Response): MangasPage = parseAlbumListResponse(response)
+    // Search
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        val url = "$baseUrl/manga-list".toHttpUrl().newBuilder()
 
-    // Chapters
+        if (query.isNotEmpty()) {
+            url.addQueryParameter("search", query)
+        }
 
-    override fun fetchChapterList(manga: SManga): Observable<List<SChapter>> {
-        val id = manga.url.substringAfterLast("_").removeSuffix("/")
+        url.addQueryParameter("page", page.toString())
 
-        return client.newCall(buildAlbumInfoRequest(id))
-            .asObservableSuccess()
-            .map { response ->
-                val album = response.parseAs<AlbumGetResponse>().data.album.get
-                val totalPictures = album.numberOfPictures
-
-                if (getMergeChapterPref()) {
-                    val chapters = mutableListOf<SChapter>()
-                    val chunkCount = ceil(totalPictures / 1000.0).toInt().coerceAtLeast(1)
-
-                    for (i in 1..chunkCount) {
-                        val chapter = SChapter.create()
-                        chapter.url = "${manga.url}?chunk=$i"
-                        chapter.name = if (chunkCount == 1) "Merged Chapter" else "Merged Chapter (Part $i)"
-                        chapter.chapter_number = i.toFloat()
-                        chapter.date_upload = (album.created?.toLong() ?: 0L) * 1000L
-                        chapters.add(chapter)
+        // Apply filters
+        val genresList = mutableListOf<String>()
+        filters.forEach { filter ->
+            when (filter) {
+                is SortFilter -> {
+                    url.addQueryParameter("sort", filter.toUriValue())
+                    if (filter.toUriValue() == "title") {
+                        url.addQueryParameter("sortOrder", "ASC")
                     }
-                    chapters.reversed()
-                } else {
-                    val chapters = mutableListOf<SChapter>()
-                    var page = 1
-                    var hasMore = true
-
-                    while (hasMore) {
-                        val newPage = client.newCall(GET(buildAlbumPicturesPageUrl(id, page))).execute()
-                        val data = newPage.parseAs<AlbumListOwnPicturesResponse>()
-                        val pictureItems = parsePictures(data)
-
-                        if (pictureItems.isEmpty()) {
-                            hasMore = false
-                        } else {
-                            pictureItems.forEach {
-                                val chapter = SChapter.create().apply {
-                                    chapter_number = it.index.toFloat()
-                                    name = "${it.index} - ${it.title}"
-                                    date_upload = (it.created ?: 0L) * 1000L
-                                }
-                                chapter.setUrlWithoutDomain(it.url)
-                                chapters.add(chapter)
-                            }
-
-                            // API natively caps `total_items` tracking to 1000 so we override that by
-                            // directly tracking standard math iteration against the true `numberOfPictures`
-                            if (page * 50 >= totalPictures || data.data.picture.list.items.isEmpty()) {
-                                hasMore = false
-                            } else {
-                                page++
-                            }
+                }
+                is GenreList -> {
+                    filter.state.forEach { genre ->
+                        if (genre.state) {
+                            genresList.add(genre.name)
                         }
                     }
-                    chapters.reversed()
                 }
+                else -> {}
             }
+        }
+
+        if (genresList.isNotEmpty()) {
+            url.addQueryParameter("genres", genresList.joinToString(","))
+        }
+
+        return GET(url.build(), headers)
     }
 
-    private fun getPictureUrl(picture: Picture) = when {
-        getResolutionPref() != "-1" -> {
-            picture.thumbnails[getResolutionPref()?.toInt()!!].url
+    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
+
+    // Manga Details
+    override fun mangaDetailsParse(response: Response): SManga = SManga.create().apply {
+        val document = response.asJsoup()
+        title = document.selectFirst("h1")?.text()?.trim() ?: ""
+        thumbnail_url = document.selectFirst("img[src*=cover], img[src*=covers], img[alt=$title]")?.attr("abs:src")
+            ?: document.selectFirst("img")?.attr("abs:src")
+
+        description = document.select("p.text-gray-300, p.text-muted-foreground, .story, #story, .description")
+            .joinToString("\n") { it.text().trim() }
+            .takeIf { it.isNotEmpty() }
+
+        genre = document.select("a[href*=genres=], span.bg-secondary, span[class*=bg-primary/20], .genre-badge")
+            .map { it.text().trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString(", ")
+
+        val statusText = document.text()
+        status = when {
+            statusText.contains("مستمر") -> SManga.ONGOING
+            statusText.contains("مكتمل") -> SManga.COMPLETED
+            statusText.contains("متوقف") -> SManga.ON_HIATUS
+            else -> SManga.UNKNOWN
         }
 
-        picture.urlToVideo != null -> {
-            picture.urlToVideo.replace(".mp4", ".gif")
-        }
-
-        picture.urlToOriginal != null -> {
-            picture.urlToOriginal
-        }
-
-        else -> {
-            picture.thumbnails.maxByOrNull { thumbnail ->
-                thumbnail.height * thumbnail.width
-            }!!.url
-        }
+        author = document.selectFirst("*:contains(المؤلف) + *, *:contains(الكاتب) + *, .author-class")?.text()?.trim()
+        artist = document.selectFirst("*:contains(الرسام) + *, .artist-class")?.text()?.trim()
     }
 
-    private fun parsePictures(data: AlbumListOwnPicturesResponse): List<PictureItem> {
-        val items = mutableListOf<PictureItem>()
+    // Chapters
+    override fun chapterListParse(response: Response): List<SChapter> {
+        val document = response.asJsoup()
+        val cleanNamePref = preferences.getBoolean(CLEAN_CHAPTER_NAME_KEY, true)
 
-        data.data.picture.list.items.forEach {
-            val index = it.position
-            val url = getPictureUrl(it)
+        val chapters = document.select("a[href*=/reader/]").map { element ->
+            SChapter.create().apply {
+                url = element.attr("href")
 
-            items.add(PictureItem(index, if (url.startsWith("//")) "https:$url" else url, it.title, it.created.toLong()))
+                var nameText = element.text().trim()
+                if (cleanNamePref) {
+                    val elementCopy = element.clone()
+                    // Remove nested labels containing dates like '16/2026/6' and AI tags
+                    elementCopy.select("span:contains(/), span:matches(\\d+/\\d+/\\d+), .date, .time").remove()
+                    elementCopy.select("span:contains(AI), .badge, .ai-badge").remove()
+                    val cleaned = elementCopy.text().trim()
+                        .replace("\n", " ")
+                        .replace("\\s+".toRegex(), " ")
+                    if (cleaned.isNotEmpty()) {
+                        nameText = cleaned
+                    }
+                }
+
+                name = nameText
+                date_upload = parseChapterDate(element.parent()?.text() ?: "")
+            }
         }
-
-        return items
+        return chapters.distinctBy { it.url }
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> = throw UnsupportedOperationException()
+    private fun parseChapterDate(dateStr: String): Long {
+        val cleanDate = dateStr.lowercase()
+        return when {
+            cleanDate.contains("منذ قليل") || cleanDate.contains("الآن") -> System.currentTimeMillis()
+            cleanDate.contains("اليوم") -> System.currentTimeMillis()
+            cleanDate.contains("أمس") -> System.currentTimeMillis() - 86400000L
+            else -> 0L
+        }
+    }
 
     // Pages
+    override fun pageListParse(response: Response): List<Page> {
+        val document = response.asJsoup()
 
-    private fun buildAlbumPicturesRequestInput(id: String, page: Int): Variables = Variables(
-        input = Input(
-            filters = listOf(
-                Filter(name = "album_id", value = id),
-            ),
-            display = getSortPref(),
-            page = page,
-            itemsPerPage = 50,
-        ),
-    )
+        // Extract from serialized Astro ChapterImageViewer props to bypass scraper trap image scripts
+        val viewerElement = document.selectFirst("astro-island[component-url*=ChapterImageViewer]")
+        if (viewerElement != null) {
+            val propsJson = viewerElement.attr("props")
+            val unescapedProps = propsJson
+                .replace("&quot;", "\"")
+                .replace("&amp;", "&")
+                .replace("\\/", "/")
+                .replace("\\u0026", "&")
 
-    private fun buildAlbumPicturesPageUrl(id: String, page: Int): HttpUrl {
-        val input = buildAlbumPicturesRequestInput(id, page)
-        return apiBaseUrl.toHttpUrl().newBuilder()
-            .addQueryParameter("operationName", "AlbumListOwnPictures")
-            .addQueryParameter("query", ALBUM_PICTURES_REQUEST_GQL)
-            .addQueryParameter("variables", input.toJsonString())
-            .build()
-    }
+            val urlRegex = """https?://[^"\s]+\.(?:jpg|jpeg|png|webp|gif)[^"\s]*""".toRegex()
+            val urls = urlRegex.findAll(unescapedProps)
+                .map { it.value.trim() }
+                .filterNot { it.contains("logo") || it.contains("avatar") || it.contains("cover") }
+                .distinct()
+                .toList()
 
-    override fun fetchPageList(chapter: SChapter): Observable<List<Page>> = if (chapter.url.startsWith("/albums/")) {
-        val chunk = chapter.url.substringAfter("?chunk=", "1").substringBefore("#").toIntOrNull() ?: 1
-        val id = chapter.url.substringBefore("?").substringAfterLast("_").removeSuffix("/")
-
-        Observable.fromCallable {
-            val pages = mutableListOf<Page>()
-            val startPage = (chunk - 1) * 20 + 1
-            val endPage = chunk * 20
-
-            for (page in startPage..endPage) {
-                val response = client.newCall(GET(buildAlbumPicturesPageUrl(id, page))).execute()
-                val data = response.parseAs<AlbumListOwnPicturesResponse>()
-                val pictureItems = parsePictures(data)
-
-                if (pictureItems.isEmpty()) break
-
-                pictureItems.forEach {
-                    pages.add(Page(pages.size, imageUrl = it.url.toHttpUrl().newBuilder().host(cdnHost).build().toString()))
+            if (urls.isNotEmpty()) {
+                return urls.mapIndexed { index, url ->
+                    Page(index, "", url)
                 }
-
-                if (pictureItems.size < 50) break
             }
-            pages
         }
-    } else {
-        Observable.just(listOf(Page(0, imageUrl = "https://$cdnHost${chapter.url}")))
-    }
 
-    override fun pageListParse(response: Response): List<Page> = throw UnsupportedOperationException()
+        // Fallback parser in case elements render without active hydrated scripts
+        val imageElements = document.select("div.manga-page img, div.reader-images img, div.reader-container img")
+        if (imageElements.isNotEmpty()) {
+            return imageElements.mapIndexed { index, img ->
+                val imageUrl = img.attr("abs:data-src").takeIf { it.isNotEmpty() }
+                    ?: img.attr("abs:src")
+                Page(index, "", imageUrl)
+            }
+        }
+
+        throw Exception("لم يتم العثور على صفحات لهذا الفصل.")
+    }
 
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
 
-    override fun fetchImageUrl(page: Page): Observable<String> = throw UnsupportedOperationException()
+    // Preferences Setup
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        val baseUrlPref = EditTextPreference(screen.context).apply {
+            key = BASE_URL_PREF_KEY
+            title = BASE_URL_PREF_TITLE
+            summary = "الحالي: %s"
+            setDefaultValue(BASE_URL_PREF_DEFAULT)
+            dialogTitle = BASE_URL_PREF_TITLE
 
-    override fun getChapterUrl(chapter: SChapter): String = if (chapter.url.startsWith("/albums/")) {
-        "$baseUrl${chapter.url.substringBefore("?")}"
-    } else {
-        "https://$cdnHost${chapter.url}"
-    }
-
-    // Details
-
-    override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl${manga.url}", headers)
-
-    override fun fetchMangaDetails(manga: SManga): Observable<SManga> {
-        val id = manga.url.substringAfterLast("_").removeSuffix("/")
-        return client.newCall(buildAlbumInfoRequest(id))
-            .asObservableSuccess()
-            .map { detailsParse(it) }
-    }
-
-    private fun detailsParse(response: Response): SManga {
-        val data = response.parseAs<AlbumGetResponse>().data.album.get
-        val manga = SManga.create()
-        manga.url = data.url
-        manga.title = data.title
-        manga.thumbnail_url = data.cover.url
-        manga.status = 0
-        manga.description = "${data.description}\n\nPictures: ${data.numberOfPictures}\nAnimated Pictures: ${data.numberOfAnimatedPictures}"
-        val genreList = mutableListOf(data.language?.title)
-        genreList += data.labels
-        genreList += data.genres.map { it.title }
-        genreList += data.audiences.map { it.title }
-        genreList += data.tags.map { it.text }
-        val artist = data.tags.find { it.text.contains("Artist:") }
-        if (artist != null) {
-            manga.artist = artist.text.substringAfter(":").trim()
-            manga.author = manga.artist
-        }
-        genreList += data.content.title
-        manga.genre = genreList.joinToString(", ")
-
-        return manga
-    }
-
-    override fun mangaDetailsParse(response: Response): SManga = throw UnsupportedOperationException()
-
-    // Related
-
-    override fun relatedMangaListRequest(manga: SManga): Request {
-        val id = manga.url.substringAfterLast("_").removeSuffix("/")
-        return buildAlbumListRelatedRequest(id)
-    }
-
-    override fun relatedMangaListParse(response: Response): List<SManga> {
-        val data = response.parseAs<AlbumRelatedResponse>()
-        with(data.data.album.listRelated) {
-            return listOfNotNull(
-                moreLikeThis,
-                itemsLikedLikeThis,
-                itemsCreatedByThisUser,
-            ).flatMap { relatedItems ->
-                relatedItems.map {
-                    SManga.create().apply {
-                        url = it.url
-                        title = it.title
-                        thumbnail_url = it.cover.url
-                    }
-                }
+            setOnPreferenceChangeListener { _, newValue ->
+                preferences.edit().putString(BASE_URL_PREF_KEY, newValue as String).commit()
             }
+        }
+
+        val cleanChapterPref = CheckBoxPreference(screen.context).apply {
+            key = CLEAN_CHAPTER_NAME_KEY
+            title = CLEAN_CHAPTER_NAME_TITLE
+            summary = CLEAN_CHAPTER_NAME_SUMMARY
+            setDefaultValue(true)
+
+            setOnPreferenceChangeListener { _, newValue ->
+                preferences.edit().putBoolean(CLEAN_CHAPTER_NAME_KEY, newValue as Boolean).commit()
+            }
+        }
+
+        screen.addPreference(baseUrlPref)
+        screen.addPreference(cleanChapterPref)
+    }
+
+    // Filters
+    class Genre(name: String) : Filter.CheckBox(name)
+
+    class GenreList(genres: List<Genre>) : Filter.Group<Genre>("التصنيفات", genres)
+
+    class SortFilter :
+        Filter.Select<String>(
+            "الترتيب",
+            arrayOf("الأحدث", "الأكثر شعبية", "أ-ي"),
+        ) {
+        fun toUriValue() = when (state) {
+            0 -> "latest"
+            1 -> "views"
+            2 -> "title"
+            else -> "latest"
         }
     }
 
-    // Popular
-
-    override fun popularMangaParse(response: Response): MangasPage = parseAlbumListResponse(response)
-
-    override fun popularMangaRequest(page: Int): Request = buildAlbumListRequest(page, getSortFilters(POPULAR_DEFAULT_SORT_STATE, lusLang))
-
-    // Search
-
-    override fun searchMangaParse(response: Response): MangasPage = parseAlbumListResponse(response)
-
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = buildAlbumListRequest(
-        page,
-        filters.let {
-            if (it.isEmpty()) {
-                getSortFilters(SEARCH_DEFAULT_SORT_STATE, lusLang)
-            } else {
-                it
-            }
-        },
-        query,
+    override fun getFilterList() = FilterList(
+        SortFilter(),
+        GenreList(getGenres()),
     )
 
-    override fun fetchSearchManga(page: Int, query: String, filters: FilterList): Observable<MangasPage> = if (query.startsWith("https://")) {
-        val url = query.toHttpUrl()
-        val album = url.pathSegments[1]
-        fetchSearchManga(page, "ALBUM:$album", filters)
-    } else if (query.startsWith("ID:")) {
-        val id = query.substringAfterLast("ID:")
-        client.newCall(buildAlbumInfoRequest(id))
-            .asObservableSuccess()
-            .map { MangasPage(listOf(detailsParse(it)), false) }
-    } else if (query.startsWith("ALBUM:")) {
-        val album = query.substringAfterLast("ALBUM:")
-        val id = album.split("_").last()
-        client.newCall(buildAlbumInfoRequest(id))
-            .asObservableSuccess()
-            .map { MangasPage(listOf(detailsParse(it)), false) }
-    } else {
-        super.fetchSearchManga(page, query, filters)
+    private fun getGenres() = listOf(
+        Genre("أكاديمية"),
+        Genre("أكشن"),
+        Genre("ألعاب"),
+        Genre("الات"),
+        Genre("الجانب المظلم من الحياة"),
+        Genre("الخيال العلمي"),
+        Genre("النجاة"),
+        Genre("الواقع الافتراضي"),
+        Genre("الهة"),
+        Genre("امرأة شريرة"),
+        Genre("انتقال"),
+        Genre("انتقام"),
+        Genre("بطل خارق"),
+        Genre("بطل غير اعتيادي"),
+        Genre("بطل مخطط"),
+        Genre("بوابات"),
+        Genre("تاريخي"),
+        Genre("تراجم"),
+        Genre("تراجيدي"),
+        Genre("تجسيد"),
+        Genre("تحقيق"),
+        Genre("تخطيط"),
+        Genre("ترويض"),
+        Genre("تشويق"),
+        Genre("تصوف"),
+        Genre("تلوين رسمي"),
+        Genre("تنمر"),
+        Genre("تناسخ"),
+        Genre("جريمة"),
+        Genre("جوسيه"),
+        Genre("جواسيس"),
+        Genre("جندر اسواب"),
+        Genre("جندر بندر"),
+        Genre("حديث"),
+        Genre("حرب"),
+        Genre("حريم"),
+        Genre("حريم عكسى"),
+        Genre("حياة مدرسية"),
+        Genre("حيوانات"),
+        Genre("خارق"),
+        Genre("خارق للطبيعة"),
+        Genre("خيال"),
+        Genre("داخل رواية"),
+        Genre("داخل لعبة"),
+        Genre("دراما"),
+        Genre("دموي"),
+        Genre("راشد"),
+        Genre("رعب"),
+        Genre("رعاية اطفال"),
+        Genre("رواية عربية"),
+        Genre("رومانسي"),
+        Genre("رومانسى"),
+        Genre("رياضة"),
+        Genre("رياضى"),
+        Genre("ساموراي"),
+        Genre("سايكوباث"),
+        Genre("سحر"),
+        Genre("سفر عبر الزمن"),
+        Genre("سينين"),
+        Genre("شريحة من الحياة"),
+        Genre("شرطة"),
+        Genre("شركة"),
+        Genre("شوجو"),
+        Genre("شونين"),
+        Genre("شياطين"),
+        Genre("طبخ"),
+        Genre("طبي"),
+        Genre("عائلى"),
+        Genre("عالم مختلف"),
+        Genre("عسكري"),
+        Genre("عصور وسطى"),
+        Genre("عنف"),
+        Genre("غموض"),
+        Genre("فانتازيا"),
+        Genre("فنتازيا"),
+        Genre("فنون الدفاع عن النفس"),
+        Genre("فنون قتال"),
+        Genre("فوق الطبيعة"),
+        Genre("قوة خارقة"),
+        Genre("كائنات فضائية"),
+        Genre("كوميدي"),
+        Genre("كوميك"),
+        Genre("لعبه"),
+        Genre("لعبة فيديو"),
+        Genre("مافيا"),
+        Genre("مانجا"),
+        Genre("مانجا ملونة"),
+        Genre("مانهوا"),
+        Genre("مأساة"),
+        Genre("مأساوي"),
+        Genre("مؤامرات"),
+        Genre("مجموعة قصص"),
+        Genre("مدرسه"),
+        Genre("مستذئب"),
+        Genre("مصاصى الدماء"),
+        Genre("معالج"),
+        Genre("مغني"),
+        Genre("مغامرة"),
+        Genre("مقتبسة"),
+        Genre("مقطع طولي"),
+        Genre("ملائكة"),
+        Genre("ملونة"),
+        Genre("ممالك"),
+        Genre("موريم"),
+        Genre("موسيقى"),
+        Genre("ناضج"),
+        Genre("نبالة"),
+        Genre("نفسي"),
+        Genre("نهاية العالم"),
+        Genre("ون شوت"),
+    )
+
+    companion object {
+        private const val BASE_URL_PREF_KEY = "baseUrl_pref"
+        private const val BASE_URL_PREF_TITLE = "عنوان الموقع (Base URL)"
+        private const val BASE_URL_PREF_DEFAULT = "https://mangasid.com"
+
+        private const val CLEAN_CHAPTER_NAME_KEY = "cleanChapterName_pref"
+        private const val CLEAN_CHAPTER_NAME_TITLE = "تنظيف اسم الفصل"
+        private const val CLEAN_CHAPTER_NAME_SUMMARY = "إزالة التواريخ والوسوم الإضافية المدمجة في اسم الفصل"
     }
-
-    override fun getFilterList(): FilterList = getSortFilters(POPULAR_DEFAULT_SORT_STATE, lusLang)
-
-    override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        val resolutionPref = ListPreference(screen.context).apply {
-            key = "${RESOLUTION_PREF_KEY}_$lang"
-            title = RESOLUTION_PREF_TITLE
-            entries = RESOLUTION_PREF_ENTRIES
-            entryValues = RESOLUTION_PREF_ENTRY_VALUES
-            setDefaultValue(RESOLUTION_PREF_DEFAULT_VALUE)
-            summary = "%s"
-
-            setOnPreferenceChangeListener { _, newValue ->
-                val selected = newValue as String
-                val index = findIndexOfValue(selected)
-                val entry = entryValues[index] as String
-                preferences.edit().putString("${RESOLUTION_PREF_KEY}_$lang", entry).commit()
-            }
-        }
-        val sortPref = ListPreference(screen.context).apply {
-            key = "${SORT_PREF_KEY}_$lang"
-            title = SORT_PREF_TITLE
-            entries = SORT_PREF_ENTRIES
-            entryValues = SORT_PREF_ENTRY_VALUES
-            setDefaultValue(SORT_PREF_DEFAULT_VALUE)
-            summary = "%s"
-
-            setOnPreferenceChangeListener { _, newValue ->
-                val selected = newValue as String
-                val index = findIndexOfValue(selected)
-                val entry = entryValues[index] as String
-                preferences.edit().putString("${SORT_PREF_KEY}_$lang", entry).commit()
-            }
-        }
-        val mergeChapterPref = CheckBoxPreference(screen.context).apply {
-            key = "${MERGE_CHAPTER_PREF_KEY}_$lang"
-            title = MERGE_CHAPTER_PREF_TITLE
-            summary = MERGE_CHAPTER_PREF_SUMMARY
-            setDefaultValue(MERGE_CHAPTER_PREF_DEFAULT_VALUE)
-
-            setOnPreferenceChangeListener { _, newValue ->
-                val checkValue = newValue as Boolean
-                preferences.edit().putBoolean("${MERGE_CHAPTER_PREF_KEY}_$lang", checkValue).commit()
-            }
-        }
-        val mirrorPref = ListPreference(screen.context).apply {
-            key = "${MIRROR_PREF_KEY}_$lang"
-            title = MIRROR_PREF_TITLE
-            entries = MIRROR_PREF_ENTRIES
-            entryValues = MIRROR_PREF_ENTRY_VALUES
-            setDefaultValue(MIRROR_PREF_DEFAULT_VALUE)
-            summary = "%s"
-
-            setOnPreferenceChangeListener { _, newValue ->
-                val selected = newValue as String
-                val index = findIndexOfValue(selected)
-                val entry = entryValues[index] as String
-                preferences.edit().putString("${MIRROR_PREF_KEY}_$lang", entry).commit()
-            }
-        }
-        screen.addPreference(resolutionPref)
-        screen.addPreference(sortPref)
-        screen.addPreference(mergeChapterPref)
-        screen.addPreference(mirrorPref)
-    }
-
-    fun getMergeChapterPref(): Boolean = preferences.getBoolean("${MERGE_CHAPTER_PREF_KEY}_$lang", MERGE_CHAPTER_PREF_DEFAULT_VALUE)
-    fun getResolutionPref(): String? = preferences.getString("${RESOLUTION_PREF_KEY}_$lang", RESOLUTION_PREF_DEFAULT_VALUE)
-    fun getSortPref(): String? = preferences.getString("${SORT_PREF_KEY}_$lang", SORT_PREF_DEFAULT_VALUE)
-    fun getMirrorPref(): String? = preferences.getString("${MIRROR_PREF_KEY}_$lang", MIRROR_PREF_DEFAULT_VALUE)
 }
