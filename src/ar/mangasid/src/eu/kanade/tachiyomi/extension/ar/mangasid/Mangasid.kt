@@ -157,8 +157,25 @@ class Mangasid :
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = response.asJsoup()
         val cleanNamePref = preferences.getBoolean(CLEAN_CHAPTER_NAME_KEY, true)
+        val unwantedPatterns = listOf(
+            "ابدأ القراءة",
+            "اقرأ الآن",
+            "اقرأ من",
+            "البداية",
+            "أول فصل",
+            "start reading",
+            "read now",
+            "read first",
+        )
 
-        val chapters = document.select("a[href*=/reader/]").map { element ->
+        val elements = document.select(".manga-chapter a[href*=/reader/], div[class*=chapter] a[href*=/reader/]")
+            .ifEmpty { document.select("a[href*=/reader/]") }
+            .filterNot { element ->
+                val text = element.text().lowercase()
+                unwantedPatterns.any { pattern -> text.contains(pattern) }
+            }
+
+        val chapters = elements.map { element ->
             SChapter.create().apply {
                 url = element.attr("href")
 
