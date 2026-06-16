@@ -1,0 +1,97 @@
+name: Build Single Extension (Test)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect Changed Extension
+        id: detect
+        run: |
+          # Find the changed file
+          CHANGED_FILE=$(git diff --name-only HEAD^1 HEAD | grep 'src/' | head -n 1)
+          
+          if [ -z "$CHANGED_FILE" ]; then
+            echo "No extension changes detected."
+            exit 0
+          fi
+          
+          # Expected format: src/ar/azora/...
+          # Get Category: 'ar'
+          CATEGORY=$(echo "$CHANGED_FILE" | cut -d'/' -f2)
+          # Get Name: 'azora'
+          NAME=$(echo "$CHANGED_FILE" | cut -d'/' -f3)
+          
+          echo "category=$CATEGORY" >> $GITHUB_OUTPUT
+          echo "name=$NAME" >> $GITHUB_OUTPUT
+          echo "Detected: $CATEGORY / $NAME"
+
+      - name: Set up JDK 17
+        if: steps.detect.outputs.category != ''
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      - name: Build Extension
+        if: steps.detect.outputs.category != ''
+        run: |
+          chmod +x gradlew
+          # Build specifically the changed extension
+          ./gradlew :src:${{ steps.detect.outputs.category }}:${{ steps.detect.outputs.name }}:assembleRelease
+
+      - name: Publish to repo-test branch
+        if: steps.detect.outputs.category != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Locate the built APK
+          # The path is usually src/category/name/build/outputs/apk/...
+          APK_PATH=$(find src/${{ steps.detect.outputs.category }}/${{ steps.detect.outputs.name }} -name "*.apk" | head -n 1)
+          
+          if [ -z "$APK_PATH" ]; then
+            echo "APK not found!"
+            exit 1
+          fi
+
+          # Prepare local directory for the branch
+          mkdir -p publish_dir
+          
+          # Setup branch
+          git fetch origin repo-test || true
+          if git show-ref --verify --quiet refs/remotes/origin/repo-test; then
+            git checkout repo-test
+          else
+            git checkout --orphan repo-test
+            git rm -rf .
+          fi
+          
+          # Create category folder (AR, EN, or ALL) and copy APK
+          # Convert category to Uppercase for the folder name
+          FOLDER_NAME=$(echo "${{ steps.detect.outputs.category }}" | tr '[:lower:]' '[:upper:]')
+          mkdir -p "$FOLDER_NAME"
+          cp "$APK_PATH" "$FOLDER_NAME/"
+          
+          git add "$FOLDER_NAME/"
+          
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "Test build: ${{ steps.detect.outputs.name }} (${{ steps.detect.outputs.category }})"
+            git push origin repo-test
+          else
+            echo "No new changes to commit."
+          fi
