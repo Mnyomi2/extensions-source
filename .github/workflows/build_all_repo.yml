@@ -152,7 +152,7 @@ jobs:
           cp -r /tmp/publish/* .
 
           git add apk icon index.json index.min.json
-          if [ -n "$(git status --porcelain)" ]; then
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
             git commit -m "Update ALL extensions repo"
             git push origin repo-all
           else
