@@ -153,11 +153,10 @@ jobs:
 
           git add apk icon index.json index.min.json
           
-          # Use 'git diff --staged' to correctly check if files in index are actually modified.
-          # Suppress error on a completely fresh orphan branch.
-          if git diff --staged --quiet 2>/dev/null; then
-            echo "No changes to publish."
-          else
+          # Safely checks if staged index files are modified, ignoring untracked files
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
             git commit -m "Update EN extensions repo"
             git push origin repo-en
+          else
+            echo "No changes to publish."
           fi
