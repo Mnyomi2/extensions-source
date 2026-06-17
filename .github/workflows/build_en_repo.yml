@@ -152,8 +152,6 @@ jobs:
           cp -r /tmp/publish/* .
 
           git add apk icon index.json index.min.json
-          
-          # Safely checks if staged index files are modified, ignoring untracked files
           if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
             git commit -m "Update EN extensions repo"
             git push origin repo-en
