@@ -6,19 +6,19 @@
 #### 1. All Languages (Combined)
 * **URL:**
   ```text
-  https://raw.githubusercontent.com/Mnyomi2/extensions-source/refs/heads/repo-all/index.min.json
+  https://raw.githubusercontent.com/Mnyomi2/extensions-source/repo-all/index.min.json
 
 
 #### 2. Arabic (AR) Only
 * **URL:**
   ```text
-  https://raw.githubusercontent.com/Mnyomi2/extensions-source/refs/heads/repo-ar/index.min.json
+  https://raw.githubusercontent.com/Mnyomi2/extensions-source/repo-ar/index.min.json
 
 
 #### 3. English (EN) Only
 * **URL:**
   ```text
-  https://raw.githubusercontent.com/Mnyomi2/extensions-source/refs/heads/repo-en/index.min.json
+  https://raw.githubusercontent.com/Mnyomi2/extensions-source/repo-en/index.min.json
 
 
 ### 🌐 Official Keiyoushi Repository
