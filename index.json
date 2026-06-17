@@ -69,6 +69,23 @@
     ]
   },
   {
+    "name": "Tachiyomi: AHottie",
+    "pkg": "eu.kanade.tachiyomi.extension.all.ahottie",
+    "apk": "tachiyomi-all.ahottie-v1.4.2.apk",
+    "lang": "all",
+    "code": 2,
+    "version": "1.4.2",
+    "nsfw": 1,
+    "sources": [
+      {
+        "name": "AHottie",
+        "lang": "all",
+        "id": "6289731484943315811",
+        "baseUrl": "https://ahottie.top"
+      }
+    ]
+  },
+  {
     "name": "Tachiyomi: Luscious",
     "pkg": "eu.kanade.tachiyomi.extension.all.luscious",
     "apk": "tachiyomi-all.luscious-v1.4.32.apk",
@@ -470,23 +487,6 @@
         "lang": "all",
         "id": "1435103006121310663",
         "baseUrl": "https://buondua.com"
-      }
-    ]
-  },
-  {
-    "name": "Tachiyomi: AHottie",
-    "pkg": "eu.kanade.tachiyomi.extension.all.ahottie",
-    "apk": "tachiyomi-all.ahottie-v1.4.3.apk",
-    "lang": "all",
-    "code": 3,
-    "version": "1.4.3",
-    "nsfw": 1,
-    "sources": [
-      {
-        "name": "AHottie",
-        "lang": "all",
-        "id": "6289731484943315811",
-        "baseUrl": "https://ahottie.top"
       }
     ]
   },
