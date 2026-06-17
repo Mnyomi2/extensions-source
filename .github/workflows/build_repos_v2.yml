@@ -1,0 +1,204 @@
+name: Build Repositories (All-in-One) v2
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_lang:
+        description: 'Select which repository to build (or choose "all-repos" to build everything)'
+        required: true
+        default: 'all-repos'
+        type: choice
+        options:
+          - all-repos
+          - ar
+          - all
+          - en
+          # 1. ADD NEW LANGUAGES TO THIS DROPDOWN LIST:
+          # - es
+          # - fr
+
+permissions:
+  contents: write   # needed to push branches and commit the signing key
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  # Job 1: Determines which repos to build based on user input, and ensures signing key exists.
+  prepare:
+    name: Prepare Environment & Key
+    runs-on: ubuntu-latest
+    outputs:
+      languages: ${{ steps.set-langs.outputs.languages }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: true
+
+      - name: Determine languages to build
+        id: set-langs
+        run: |
+          # Get input selection
+          INPUT_LANG="${{ github.event.inputs.target_lang }}"
+          
+          # 2. ADD NEW LANGUAGES TO THIS DEFAULT LIST:
+          ALL_LANGS='["ar", "all", "en"]'
+          
+          if [ -z "$INPUT_LANG" ] || [ "$INPUT_LANG" = "all-repos" ]; then
+            echo "languages=$ALL_LANGS" >> "$GITHUB_OUTPUT"
+            echo "Selected: All Repositories ($ALL_LANGS)"
+          else
+            echo "languages=[\"$INPUT_LANG\"]" >> "$GITHUB_OUTPUT"
+            echo "Selected: Single Repository ($INPUT_LANG)"
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      - name: Generate key if missing
+        run: |
+          if [ -f "signingkey/signingkey.jks" ]; then
+            echo "Signing key already exists."
+          else
+            echo "Signing key not found. Generating a new one..."
+            mkdir -p signingkey
+            
+            keytool -genkey -v \
+              -keystore signingkey/signingkey.jks \
+              -alias key0 \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android -keypass android \
+              -dname "CN=Extension Repo, OU=CI, O=CI, L=CI, S=CI, C=US"
+              
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -f signingkey/signingkey.jks
+            git commit -m "chore: persist signing key [skip ci]"
+            git push origin main
+          fi
+
+  # Job 2: Runs the build for the selected language(s)
+  build:
+    name: Build ${{ matrix.lang }} extensions
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      matrix:
+        # This reads the output of the prepare job dynamically
+        lang: ${{ fromJson(needs.prepare.outputs.languages) }}
+      fail-fast: false
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: true
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Load signing key
+        run: |
+          if [ -f "signingkey/signingkey.jks" ]; then
+            cp signingkey/signingkey.jks signingkey.jks
+          else
+            echo "Error: Signing key not found."
+            exit 1
+          fi
+
+      - name: Discover ${{ matrix.lang }} modules
+        id: modules
+        run: |
+          tasks=""
+          for d in src/${{ matrix.lang }}/*/; do
+            name="$(basename "$d")"
+            if [ -f "${d}build.gradle" ] || [ -f "${d}build.gradle.kts" ]; then
+              tasks="$tasks :src:${{ matrix.lang }}:${name}:assembleRelease"
+            fi
+          done
+          echo "Discovered:$tasks"
+          echo "tasks=$tasks" >> "$GITHUB_OUTPUT"
+
+      - name: Build ${{ matrix.lang }} extensions (assembleRelease)
+        env:
+          ALIAS: key0
+          KEY_STORE_PASSWORD: android
+          KEY_PASSWORD: android
+        run: |
+          chmod +x gradlew
+          ./gradlew ${{ steps.modules.outputs.tasks }} --stacktrace
+
+      - name: Collect APKs
+        run: |
+          mkdir -p repo/apk
+          find src/${{ matrix.lang }} -path '*/build/outputs/apk/*/*.apk' | while read -r apk; do
+            base="$(basename "$apk")"
+            dest="${base/-release.apk/.apk}"
+            cp -v "$apk" "repo/apk/$dest"
+          done
+          echo "=== APKs ==="; ls -lh repo/apk/
+
+      - name: Run Inspector (extract source metadata)
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+        run: |
+          INSPECTOR_LINK="$(curl -s 'https://api.github.com/repos/keiyoushi/extensions-inspector/releases/latest' | jq -r '.assets[0].browser_download_url')"
+          echo "Inspector: $INSPECTOR_LINK"
+          curl -L "$INSPECTOR_LINK" -o Inspector.jar
+          java -jar Inspector.jar "repo/apk" "output.json" "tmp"
+          echo "=== output.json (head) ==="; head -c 600 output.json; echo
+
+      - name: Generate index.min.json + icons
+        run: |
+          python ./.github/scripts/create-repo.py
+          python - <<'PY'
+          import json
+          data = json.load(open("repo/index.min.json", encoding="utf-8"))
+          json.dump(data, open("repo/index.json","w",encoding="utf-8"),
+                    ensure_ascii=False, indent=2)
+          print(f"Indexed {len(data)} extensions")
+          PY
+          ls -R repo | head -40
+
+      - name: Publish to repo-${{ matrix.lang }} branch
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p /tmp/publish
+          cp -r repo/* /tmp/publish/
+
+          git reset --hard
+          git clean -fd
+
+          git fetch origin repo-${{ matrix.lang }} || true
+          if git show-ref --verify --quiet refs/remotes/origin/repo-${{ matrix.lang }}; then
+            git checkout -B repo-${{ matrix.lang }} origin/repo-${{ matrix.lang }}
+          else
+            git checkout --orphan repo-${{ matrix.lang }}
+            git rm -rf . >/dev/null 2>&1 || true
+          fi
+
+          rm -rf apk icon index.json index.min.json
+          cp -r /tmp/publish/* .
+
+          git add apk icon index.json index.min.json
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            git commit -m "Update ${{ matrix.lang }} extensions repo"
+            git push origin repo-${{ matrix.lang }}
+          else
+            echo "No changes to publish."
+          fi
