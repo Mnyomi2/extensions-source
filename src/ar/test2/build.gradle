@@ -1,0 +1,8 @@
+ext {
+    extName = 'Test2'
+    extClass = '.Test2'
+    extVersionCode = 2
+    isNsfw = false
+}
+
+apply plugin: "kei.plugins.extension.legacy"
