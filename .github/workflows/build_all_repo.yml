@@ -1,4 +1,4 @@
-name: Build EN repo
+name: Build ALL repo
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build EN extensions and publish repo
+    name: Build ALL extensions and publish repo
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -56,20 +56,20 @@ jobs:
             git push origin main
           fi
 
-      - name: Discover EN modules
+      - name: Discover ALL modules
         id: modules
         run: |
           tasks=""
-          for d in src/en/*/; do
+          for d in src/all/*/; do
             name="$(basename "$d")"
             if [ -f "${d}build.gradle" ] || [ -f "${d}build.gradle.kts" ]; then
-              tasks="$tasks :src:en:${name}:assembleRelease"
+              tasks="$tasks :src:all:${name}:assembleRelease"
             fi
           done
           echo "Discovered:$tasks"
           echo "tasks=$tasks" >> "$GITHUB_OUTPUT"
 
-      - name: Build EN extensions (assembleRelease)
+      - name: Build ALL extensions (assembleRelease)
         env:
           ALIAS: key0
           KEY_STORE_PASSWORD: android
@@ -81,7 +81,7 @@ jobs:
       - name: Collect APKs
         run: |
           mkdir -p repo/apk
-          find src/en -path '*/build/outputs/apk/*/*.apk' | while read -r apk; do
+          find src/all -path '*/build/outputs/apk/*/*.apk' | while read -r apk; do
             base="$(basename "$apk")"
             dest="${base/-release.apk/.apk}"
             cp -v "$apk" "repo/apk/$dest"
@@ -110,7 +110,7 @@ jobs:
           PY
           ls -R repo | head -40
 
-      - name: Publish to repo-en branch
+      - name: Publish to repo-all branch
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -121,11 +121,11 @@ jobs:
           git reset --hard
           git clean -fd
 
-          git fetch origin repo-en || true
-          if git show-ref --verify --quiet refs/remotes/origin/repo-en; then
-            git checkout -B repo-en origin/repo-en
+          git fetch origin repo-all || true
+          if git show-ref --verify --quiet refs/remotes/origin/repo-all; then
+            git checkout -B repo-all origin/repo-all
           else
-            git checkout --orphan repo-en
+            git checkout --orphan repo-all
             git rm -rf . >/dev/null 2>&1 || true
           fi
 
@@ -136,8 +136,8 @@ jobs:
           
           # FIX: Only commit if there are actually staged differences
           if ! git diff --cached --quiet; then
-            git commit -m "Update EN extensions repo"
-            git push origin repo-en
+            git commit -m "Update ALL extensions repo"
+            git push origin repo-all
           else
             echo "No changes to publish."
           fi
