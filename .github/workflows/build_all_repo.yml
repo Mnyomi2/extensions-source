@@ -1,10 +1,23 @@
 name: Build ALL repo
 
+# Self-contained pipeline (no PAT / no repo secrets required):
+#   1. Builds every src/all extension as a signed release APK
+#      (signing key is generated on the fly inside the runner).
+#   2. Uses the keiyoushi Inspector to extract source metadata.
+#   3. Generates index.min.json + index.json + icons.
+#   4. Publishes everything to the "repo-all" branch of THIS repository
+#      using the built-in GITHUB_TOKEN.
+#
+# After it runs, add this URL as an extension source in your app:
+#   https://raw.githubusercontent.com/<OWNER>/<REPO>/repo-all/index.min.json
+#
+# Trigger: manually (Actions -> Build ALL repo -> Run workflow) or on push to main.
+
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write   # needed to push the repo-all branch via GITHUB_TOKEN
 
 concurrency:
   group: ${{ github.workflow }}
@@ -20,7 +33,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: main
-          persist-credentials: true
+          persist-credentials: true   # keep token for the final push
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -49,6 +62,7 @@ jobs:
               
             cp signingkey.jks signingkey/signingkey.jks
             
+            # Configure git and force-add the ignored signing key
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add -f signingkey/signingkey.jks
@@ -83,6 +97,7 @@ jobs:
           mkdir -p repo/apk
           find src/all -path '*/build/outputs/apk/*/*.apk' | while read -r apk; do
             base="$(basename "$apk")"
+            # normalise: tachiyomi-all.foo-v1.2.3-release.apk -> tachiyomi-all.foo-v1.2.3.apk
             dest="${base/-release.apk/.apk}"
             cp -v "$apk" "repo/apk/$dest"
           done
@@ -101,6 +116,7 @@ jobs:
       - name: Generate index.min.json + icons
         run: |
           python ./.github/scripts/create-repo.py
+          # also provide a pretty index.json for convenience
           python - <<'PY'
           import json
           data = json.load(open("repo/index.min.json", encoding="utf-8"))
@@ -115,9 +131,11 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # Work in a clean worktree for the repo-all branch
           mkdir -p /tmp/publish
           cp -r repo/* /tmp/publish/
 
+          # Reset local changes and clean untracked files to avoid checkout conflicts
           git reset --hard
           git clean -fd
 
@@ -129,13 +147,12 @@ jobs:
             git rm -rf . >/dev/null 2>&1 || true
           fi
 
+          # replace contents
           rm -rf apk icon index.json index.min.json
           cp -r /tmp/publish/* .
 
           git add apk icon index.json index.min.json
-          
-          # FIX: Only commit if there are actually staged differences
-          if ! git diff --cached --quiet; then
+          if [ -n "$(git status --porcelain)" ]; then
             git commit -m "Update ALL extensions repo"
             git push origin repo-all
           else
