@@ -24,6 +24,7 @@ import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import kotlin.time.Duration.Companion.seconds
 
+
 class Test :
     HttpSource(),
     ConfigurableSource {
