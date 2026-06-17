@@ -10,7 +10,7 @@ from pathlib import Path
 # --- CONFIGURATION ---
 # ==========================================
 INPUT_NAME = "test2" 
-LANGUAGE_CODE = "ar"
+LANGUAGE_CODE = "es"
 
 # Paste ONE of the following here:
 # 1. Image URL (http:// or https://)
