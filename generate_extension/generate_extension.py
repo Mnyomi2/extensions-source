@@ -2,18 +2,22 @@ import os
 import sys
 import subprocess
 import urllib.request
+import base64
 from io import BytesIO
 from pathlib import Path
 
 # ==========================================
 # --- CONFIGURATION ---
 # ==========================================
-INPUT_NAME = "Mangasid" 
+INPUT_NAME = "test2" 
 LANGUAGE_CODE = "ar"
 
-# Paste EITHER an image URL (http/https...) OR raw SVG code (<svg...) here.
-# The script will automatically detect which one you provided.
-ICON_INPUT = """https://static.vecteezy.com/system/resources/previews/057/068/323/large_2x/single-fresh-red-strawberry-on-table-green-background-food-fruit-sweet-macro-juicy-plant-image-photo.jpg"""
+# Paste ONE of the following here:
+# 1. Image URL (http:// or https://)
+# 2. Raw SVG code (<svg...)
+# 3. Data URI (data:image/png;base64,...)
+# 4. Plain Base64 text (iVBORw0KGgo...)
+ICON_INPUT = """<svg viewBox='0 0 100 100' fill='none' xmlns='http://www.w3.org/2000/svg'><rect x='2' y='2' width='96' height='96' rx='24' fill='#111115' stroke='#22222B' stroke-width='1.5'/><path d='M20 10v80M35 10v80M50 10v80M65 10v80M80 10v80M10 20h80M10 35h80M10 50h80M10 65h80M10 80h80' stroke='#22222B' stroke-width='0.75' stroke-opacity='0.2'/><path d='M17.322 67.678A25 25 0 0 1 17.322 32.322L25.454 40.454A13.5 13.5 0 0 0 25.454 59.546Z' fill='#E37411'/><path d='M17.322 32.322A25 25 0 0 1 47.904 28.588A27.4 27.4 0 0 0 40.525 37.682A13.5 13.5 0 0 0 25.454 40.454Z' fill='#F9AB00'/><path d='M25.454 59.546A13.5 13.5 0 0 0 40.525 62.318A27.4 27.4 0 0 0 47.904 71.412A25 25 0 0 1 17.322 67.678Z' fill='#F9AB00'/><path d='M47.322 67.678A25 25 0 0 1 82.678 32.322L74.546 40.454A13.5 13.5 0 0 0 55.454 59.546Z' fill='#F9AB00'/><path d='M82.678 32.322A25 25 0 0 1 47.322 67.678L55.454 59.546A13.5 13.5 0 0 0 74.546 40.454Z' fill='#E37411'/><path d='M8 50L24 50Q27 45 30 50L36 50L39 62L44 18L49 78L52 50L58 50Q62 41 66 50L92 50' stroke='#111115' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'/><path d='M8 50L24 50Q27 45 30 50L36 50L39 62L44 18L49 78L52 50L58 50Q62 41 66 50L92 50' stroke='#10B981' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/><circle cx='82' cy='18' r='5' fill='#10B981' fill-opacity='0.25'/><circle cx='82' cy='18' r='2' fill='#10B981'/></svg>"""
 
 # ==========================================
 
@@ -47,7 +51,7 @@ def install_requirements(need_svg=False, need_pillow=False):
 BUILD_GRADLE_TEMPLATE = """ext {{
     extName = '{ext_name}'
     extClass = '.{ext_name}'
-    extVersionCode = 1
+    extVersionCode = 2
     isNsfw = false
 }}
 
@@ -272,8 +276,6 @@ class {ext_name} :
             val propsJson = viewerElement.attr("props")
             val unescapedProps = propsJson
                 .replace("&quot;", "\\"")
-            val unescapedProps = propsJson
-                .replace("&quot;", "\\"")
                 .replace("&amp;", "&")
                 .replace("\\\\/", "/")
                 .replace("\\\\u0026", "&")
@@ -410,19 +412,62 @@ def main():
     }
 
     # ==========================================
-    # --- AUTO DETECT IMAGE VS SVG ---
+    # --- AUTO DETECT ICON INPUT FORMAT ---
     # ==========================================
     clean_input = ICON_INPUT.strip()
+    img_data = None
+    is_svg = False
     
-    if clean_input.startswith("http://") or clean_input.startswith("https://"):
-        print(f"Detected URL. Downloading image...")
-        _, Image = install_requirements(need_pillow=True)
-        
-        try:
+    if not clean_input:
+        print("Warning: ICON_INPUT is empty. No icons generated.")
+        return
+
+    try:
+        if clean_input.startswith("<svg"):
+            print("Detected SVG data...")
+            is_svg = True
+            
+        elif clean_input.startswith("http://") or clean_input.startswith("https://"):
+            print("Detected Image URL. Downloading...")
             req = urllib.request.Request(clean_input, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req) as response:
                 img_data = response.read()
+                
+        elif clean_input.startswith("data:image/"):
+            print("Detected Data URI Base64. Decoding...")
+            if ";base64," in clean_input:
+                base64_str = clean_input.split(";base64,", 1)[1]
+                img_data = base64.b64decode(base64_str)
+            else:
+                print("Error: Invalid Data URI format. Missing ';base64,'")
+                sys.exit(1)
+                
+        else:
+            print("Detected Plain Base64 string. Decoding...")
+            # Fix missing padding commonly found in plain base64 strings
+            padded_input = clean_input + '=' * (-len(clean_input) % 4)
+            img_data = base64.b64decode(padded_input, validate=True)
             
+    except Exception as e:
+        print(f"Error parsing ICON_INPUT: {e}")
+        sys.exit(1)
+
+    # ==========================================
+    # --- PROCESS AND SAVE ICONS ---
+    # ==========================================
+    if is_svg:
+        resvg, _ = install_requirements(need_svg=True)
+        for folder_name, size in icon_sizes.items():
+            folder_path = res_dir / folder_name
+            folder_path.mkdir(parents=True, exist_ok=True)
+            
+            print(f"Generating SVG icon for {folder_name} ({size}x{size})...")
+            png_bytes = resvg.svg_to_bytes(svg_string=clean_input, width=size, height=size)
+            (folder_path / "ic_launcher.png").write_bytes(png_bytes)
+            
+    elif img_data:
+        _, Image = install_requirements(need_pillow=True)
+        try:
             base_image = Image.open(BytesIO(img_data)).convert("RGBA")
             
             for folder_name, size in icon_sizes.items():
@@ -434,23 +479,8 @@ def main():
                 resized_image.save(folder_path / "ic_launcher.png", format="PNG")
                 
         except Exception as e:
-            print(f"Failed to download or process the image: {e}")
+            print(f"Failed to process the downloaded/decoded image: {e}")
             sys.exit(1)
-            
-    elif clean_input.startswith("<svg"):
-        print(f"Detected SVG data...")
-        resvg, _ = install_requirements(need_svg=True)
-        
-        for folder_name, size in icon_sizes.items():
-            folder_path = res_dir / folder_name
-            folder_path.mkdir(parents=True, exist_ok=True)
-            
-            print(f"Generating SVG icon for {folder_name} ({size}x{size})...")
-            png_bytes = resvg.svg_to_bytes(svg_string=clean_input, width=size, height=size)
-            (folder_path / "ic_launcher.png").write_bytes(png_bytes)
-            
-    else:
-        print("Warning: ICON_INPUT is neither a valid URL nor a valid SVG. No icons generated.")
 
     print("\nSuccess! Extension code and icons successfully generated.")
 
