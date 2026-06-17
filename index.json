@@ -85,6 +85,23 @@
     ]
   },
   {
+    "name": "Tachiyomi: Akai Comic",
+    "pkg": "eu.kanade.tachiyomi.extension.en.akaicomic",
+    "apk": "tachiyomi-en.akaicomic-v1.4.3.apk",
+    "lang": "en",
+    "code": 3,
+    "version": "1.4.3",
+    "nsfw": 0,
+    "sources": [
+      {
+        "name": "Akai Comic",
+        "lang": "en",
+        "id": "1987646205658282178",
+        "baseUrl": "https://akaicomic.org"
+      }
+    ]
+  },
+  {
     "name": "Tachiyomi: Patch Friday",
     "pkg": "eu.kanade.tachiyomi.extension.en.patchfriday",
     "apk": "tachiyomi-en.patchfriday-v1.4.2.apk",
@@ -3073,23 +3090,6 @@
         "lang": "en",
         "id": "569821715369244319",
         "baseUrl": "https://comickfan.com"
-      }
-    ]
-  },
-  {
-    "name": "Tachiyomi: Akai Comic",
-    "pkg": "eu.kanade.tachiyomi.extension.en.akaicomic",
-    "apk": "tachiyomi-en.akaicomic-v1.4.4.apk",
-    "lang": "en",
-    "code": 4,
-    "version": "1.4.4",
-    "nsfw": 0,
-    "sources": [
-      {
-        "name": "Akai Comic",
-        "lang": "en",
-        "id": "1987646205658282178",
-        "baseUrl": "https://akaicomic.org"
       }
     ]
   },
