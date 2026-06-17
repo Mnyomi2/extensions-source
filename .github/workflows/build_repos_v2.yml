@@ -14,7 +14,7 @@ on:
           - all
           - en
           # 1. ADD NEW LANGUAGES TO THIS DROPDOWN LIST:
-          # - es
+          - es
           # - fr
 
 permissions:
@@ -45,7 +45,7 @@ jobs:
           INPUT_LANG="${{ github.event.inputs.target_lang }}"
           
           # 2. ADD NEW LANGUAGES TO THIS DEFAULT LIST:
-          ALL_LANGS='["ar", "all", "en"]'
+          ALL_LANGS='["ar", "all", "en", "es"]'
           
           if [ -z "$INPUT_LANG" ] || [ "$INPUT_LANG" = "all-repos" ]; then
             echo "languages=$ALL_LANGS" >> "$GITHUB_OUTPUT"
