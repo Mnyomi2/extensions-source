@@ -1,23 +1,10 @@
-name: Build ALL repo
-
-# Self-contained pipeline (no PAT / no repo secrets required):
-#   1. Builds every src/all extension as a signed release APK
-#      (signing key is generated on the fly inside the runner).
-#   2. Uses the keiyoushi Inspector to extract source metadata.
-#   3. Generates index.min.json + index.json + icons.
-#   4. Publishes everything to the "repo-all" branch of THIS repository
-#      using the built-in GITHUB_TOKEN.
-#
-# After it runs, add this URL as an extension source in your app:
-#   https://raw.githubusercontent.com/<OWNER>/<REPO>/repo-all/index.min.json
-#
-# Trigger: manually (Actions -> Build ALL repo -> Run workflow) or on push to main.
+name: Build EN repo
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # needed to push the repo-all branch via GITHUB_TOKEN
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}
@@ -25,7 +12,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build ALL extensions and publish repo
+    name: Build EN extensions and publish repo
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -33,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: main
-          persist-credentials: true   # keep token for the final push
+          persist-credentials: true
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -62,7 +49,6 @@ jobs:
               
             cp signingkey.jks signingkey/signingkey.jks
             
-            # Configure git and force-add the ignored signing key
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add -f signingkey/signingkey.jks
@@ -70,20 +56,20 @@ jobs:
             git push origin main
           fi
 
-      - name: Discover ALL modules
+      - name: Discover EN modules
         id: modules
         run: |
           tasks=""
-          for d in src/all/*/; do
+          for d in src/en/*/; do
             name="$(basename "$d")"
             if [ -f "${d}build.gradle" ] || [ -f "${d}build.gradle.kts" ]; then
-              tasks="$tasks :src:all:${name}:assembleRelease"
+              tasks="$tasks :src:en:${name}:assembleRelease"
             fi
           done
           echo "Discovered:$tasks"
           echo "tasks=$tasks" >> "$GITHUB_OUTPUT"
 
-      - name: Build ALL extensions (assembleRelease)
+      - name: Build EN extensions (assembleRelease)
         env:
           ALIAS: key0
           KEY_STORE_PASSWORD: android
@@ -95,9 +81,8 @@ jobs:
       - name: Collect APKs
         run: |
           mkdir -p repo/apk
-          find src/all -path '*/build/outputs/apk/*/*.apk' | while read -r apk; do
+          find src/en -path '*/build/outputs/apk/*/*.apk' | while read -r apk; do
             base="$(basename "$apk")"
-            # normalise: tachiyomi-all.foo-v1.2.3-release.apk -> tachiyomi-all.foo-v1.2.3.apk
             dest="${base/-release.apk/.apk}"
             cp -v "$apk" "repo/apk/$dest"
           done
@@ -116,7 +101,6 @@ jobs:
       - name: Generate index.min.json + icons
         run: |
           python ./.github/scripts/create-repo.py
-          # also provide a pretty index.json for convenience
           python - <<'PY'
           import json
           data = json.load(open("repo/index.min.json", encoding="utf-8"))
@@ -126,38 +110,34 @@ jobs:
           PY
           ls -R repo | head -40
 
-      - name: Publish to repo-all branch
+      - name: Publish to repo-en branch
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Work in a clean worktree for the repo-all branch
           mkdir -p /tmp/publish
           cp -r repo/* /tmp/publish/
 
-          # Reset local changes and clean untracked files to avoid checkout conflicts
           git reset --hard
           git clean -fd
 
-          git fetch origin repo-all || true
-          if git show-ref --verify --quiet refs/remotes/origin/repo-all; then
-            git checkout -B repo-all origin/repo-all
+          git fetch origin repo-en || true
+          if git show-ref --verify --quiet refs/remotes/origin/repo-en; then
+            git checkout -B repo-en origin/repo-en
           else
-            git checkout --orphan repo-all
+            git checkout --orphan repo-en
             git rm -rf . >/dev/null 2>&1 || true
           fi
 
-          # replace contents
           rm -rf apk icon index.json index.min.json
           cp -r /tmp/publish/* .
 
           git add apk icon index.json index.min.json
           
-          # Use 'git diff --staged' to correctly check if files in index are actually modified. 
-          # Suppress error on a completely fresh orphan branch.
-          if git diff --staged --quiet 2>/dev/null; then
-            echo "No changes to publish."
+          # FIX: Only commit if there are actually staged differences
+          if ! git diff --cached --quiet; then
+            git commit -m "Update EN extensions repo"
+            git push origin repo-en
           else
-            git commit -m "Update ALL extensions repo"
-            git push origin repo-all
+            echo "No changes to publish."
           fi
