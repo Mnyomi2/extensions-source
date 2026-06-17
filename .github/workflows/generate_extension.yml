@@ -1,0 +1,84 @@
+name: Auto-Generate Extension
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'generate_extension/generate_extension.py'
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python Dependencies
+        run: pip install resvg-py Pillow
+
+      - name: Run Script to Generate Extension
+        run: |
+          # Run the python script from the root folder
+          python generate_extension/generate_extension.py
+
+          # Extract the variables from the python file using grep and cut
+          INPUT_NAME=$(grep -E '^INPUT_NAME\s*=' generate_extension/generate_extension.py | cut -d'"' -f2)
+          LANG_CODE=$(grep -E '^LANGUAGE_CODE\s*=' generate_extension/generate_extension.py | cut -d'"' -f2)
+          
+          # Convert INPUT_NAME to lowercase for the folder name
+          LOWER_NAME=$(echo "$INPUT_NAME" | tr '[:upper:]' '[:lower:]' | xargs)
+          
+          echo "Detected Extension Name: $INPUT_NAME"
+          echo "Detected Language: $LANG_CODE"
+          echo "Generated Folder: $LOWER_NAME"
+          
+          # Make sure target directory exists
+          mkdir -p "src/$LANG_CODE"
+          
+          # Remove the old extension version if it exists, then move the newly generated one
+          rm -rf "src/$LANG_CODE/$LOWER_NAME"
+          mv "$LOWER_NAME" "src/$LANG_CODE/"
+          
+          # Save variables for the next steps
+          echo "LANG_CODE=$LANG_CODE" >> $GITHUB_ENV
+          echo "LOWER_NAME=$LOWER_NAME" >> $GITHUB_ENV
+          echo "INPUT_NAME=$INPUT_NAME" >> $GITHUB_ENV
+
+      - name: Set up JDK 17 (For Spotless Formatting)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      - name: Fix Formatting (Spotless Apply)
+        run: |
+          chmod +x gradlew
+          # This forces Gradle to format the new Kotlin and build.gradle files correctly
+          ./gradlew :src:${{ env.LANG_CODE }}:${{ env.LOWER_NAME }}:spotlessApply || true
+
+      - name: Commit and Push to Main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add the newly generated extension folder
+          git add "src/${{ env.LANG_CODE }}/${{ env.LOWER_NAME }}"
+          
+          # Check if there are new files to commit
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "Auto-generate extension: ${{ env.INPUT_NAME }} (${{ env.LANG_CODE }})"
+            git push origin main
+          else
+            echo "No changes needed. The extension is up-to-date."
+          fi
