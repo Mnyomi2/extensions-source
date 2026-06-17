@@ -302,7 +302,7 @@ class {ext_name} :
             }}
         }}
 
-        throw Exception("لم يتم العثور على صفحات لهذا الفصل.")
+        throw Exception("No pages were found for this chapter")
     }}
 
     override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
