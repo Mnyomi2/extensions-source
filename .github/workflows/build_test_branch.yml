@@ -61,6 +61,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
           # Locate the built APK
+          # The path is usually src/category/name/build/outputs/apk/...
           APK_PATH=$(find src/${{ steps.detect.outputs.category }}/${{ steps.detect.outputs.name }} -name "*.apk" | head -n 1)
           
           if [ -z "$APK_PATH" ]; then
@@ -68,11 +69,11 @@ jobs:
             exit 1
           fi
 
-          # Save the APK to a temporary directory outside the Git workspace
-          cp "$APK_PATH" /tmp/built_apk.apk
-          APK_NAME=$(basename "$APK_PATH")
-
-          # Discard local changes (like the modified execution bit on gradlew) to avoid checkout conflicts
+          # Extract filename and backup APK to a safe temp folder outside the repository
+          APK_FILENAME=$(basename "$APK_PATH")
+          cp "$APK_PATH" /tmp/$APK_FILENAME
+          
+          # Revert the "chmod +x gradlew" change so Git allows the checkout
           git reset --hard
           
           # Setup branch
@@ -84,10 +85,13 @@ jobs:
             git rm -rf .
           fi
           
-          # Create category folder (AR, EN, or ALL) and copy APK back
+          # Create category folder (AR, EN, or ALL)
+          # Convert category to Uppercase for the folder name
           FOLDER_NAME=$(echo "${{ steps.detect.outputs.category }}" | tr '[:lower:]' '[:upper:]')
           mkdir -p "$FOLDER_NAME"
-          cp /tmp/built_apk.apk "$FOLDER_NAME/$APK_NAME"
+          
+          # Copy the APK back from the temp folder to the branch folder
+          cp "/tmp/$APK_FILENAME" "$FOLDER_NAME/"
           
           git add "$FOLDER_NAME/"
           
