@@ -47,7 +47,7 @@ def install_requirements(need_svg=False, need_pillow=False):
 BUILD_GRADLE_TEMPLATE = """ext {{
     extName = '{ext_name}'
     extClass = '.{ext_name}'
-    extVersionCode = 2
+    extVersionCode = 1
     isNsfw = false
 }}
 
