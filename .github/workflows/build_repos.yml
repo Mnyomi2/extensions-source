@@ -1,4 +1,4 @@
-name: Build All Repositories (All-in-One)
+name: Build Repositories (All-in-One)
 
 on:
   workflow_dispatch:
