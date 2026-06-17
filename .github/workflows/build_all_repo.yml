@@ -152,9 +152,12 @@ jobs:
           cp -r /tmp/publish/* .
 
           git add apk icon index.json index.min.json
-          if [ -n "$(git status --porcelain)" ]; then
+          
+          # Use 'git diff --staged' to correctly check if files in index are actually modified. 
+          # Suppress error on a completely fresh orphan branch.
+          if git diff --staged --quiet 2>/dev/null; then
+            echo "No changes to publish."
+          else
             git commit -m "Update ALL extensions repo"
             git push origin repo-all
-          else
-            echo "No changes to publish."
           fi
