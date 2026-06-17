@@ -61,7 +61,6 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
           # Locate the built APK
-          # The path is usually src/category/name/build/outputs/apk/...
           APK_PATH=$(find src/${{ steps.detect.outputs.category }}/${{ steps.detect.outputs.name }} -name "*.apk" | head -n 1)
           
           if [ -z "$APK_PATH" ]; then
@@ -69,8 +68,12 @@ jobs:
             exit 1
           fi
 
-          # Prepare local directory for the branch
-          mkdir -p publish_dir
+          # Save the APK to a temporary directory outside the Git workspace
+          cp "$APK_PATH" /tmp/built_apk.apk
+          APK_NAME=$(basename "$APK_PATH")
+
+          # Discard local changes (like the modified execution bit on gradlew) to avoid checkout conflicts
+          git reset --hard
           
           # Setup branch
           git fetch origin repo-test || true
@@ -81,11 +84,10 @@ jobs:
             git rm -rf .
           fi
           
-          # Create category folder (AR, EN, or ALL) and copy APK
-          # Convert category to Uppercase for the folder name
+          # Create category folder (AR, EN, or ALL) and copy APK back
           FOLDER_NAME=$(echo "${{ steps.detect.outputs.category }}" | tr '[:lower:]' '[:upper:]')
           mkdir -p "$FOLDER_NAME"
-          cp "$APK_PATH" "$FOLDER_NAME/"
+          cp /tmp/built_apk.apk "$FOLDER_NAME/$APK_NAME"
           
           git add "$FOLDER_NAME/"
           
