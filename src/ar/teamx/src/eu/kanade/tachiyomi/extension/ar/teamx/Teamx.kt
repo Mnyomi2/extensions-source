@@ -29,9 +29,6 @@ class Teamx :
     ConfigurableSource {
     override val name = "TeamX"
 
-    override val baseUrl: String
-        get() = preferences.getString(BASE_URL_PREF_KEY, BASE_URL_PREF_DEFAULT) ?: BASE_URL_PREF_DEFAULT
-
     override val lang = "ar"
 
     override val supportsLatest = true
