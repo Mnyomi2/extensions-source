@@ -1,8 +1,0 @@
-ext {
-    extName = 'Team-x'
-    extClass = '.Team-x'
-    extVersionCode = 1
-    isNsfw = false
-}
-
-apply plugin: "kei.plugins.extension.legacy"
