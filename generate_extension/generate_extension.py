@@ -9,7 +9,7 @@ from pathlib import Path
 # ==========================================
 # --- CONFIGURATION ---
 # ==========================================
-INPUT_NAME = "Team-X" 
+INPUT_NAME = "olympustaff" 
 LANGUAGE_CODE = "ar"
 
 # Paste ONE of the following here:
