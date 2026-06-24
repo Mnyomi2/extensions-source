@@ -434,9 +434,9 @@ class Olympustaff :
         displayName: String,
         private val vals: Array<Pair<String?, String>>,
     ) : Filter.Select<String>(
-            displayName,
-            vals.map { it.second }.toTypedArray(),
-        ) {
+        displayName,
+        vals.map { it.second }.toTypedArray(),
+    ) {
         fun toUriPart() = vals[state].first
     }
 
