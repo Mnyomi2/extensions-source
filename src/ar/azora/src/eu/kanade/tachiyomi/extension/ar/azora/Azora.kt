@@ -7,20 +7,19 @@ import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.ParsedHttpSource
+import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.network.rateLimit
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
 
-class Azora : ParsedHttpSource() {
+class Azora : HttpSource() {
     override val name = "Azora"
 
     override val baseUrl = "https://azoramoon.com"
@@ -36,9 +35,10 @@ class Azora : ParsedHttpSource() {
     // ============================== Popular ===============================
     override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/series?sortBy=popular&page=$page", headers)
 
-    override fun popularMangaSelector() = "div.grid > div"
+    private val popularMangaSelector = "div.grid > div"
+    private val nextPageSelector = "button[aria-label=الصفحة التالية]:not([disabled])"
 
-    override fun popularMangaFromElement(element: Element): SManga = SManga.create().apply {
+    private fun popularMangaFromElement(element: Element): SManga = SManga.create().apply {
         val linkElement = element.selectFirst("a[href*=/series/]")!!
         setUrlWithoutDomain(linkElement.attr("href"))
         title = linkElement.attr("title").trim()
@@ -57,11 +57,9 @@ class Azora : ParsedHttpSource() {
         }
     }
 
-    override fun popularMangaNextPageSelector() = "button[aria-label=الصفحة التالية]:not([disabled])"
-
     override fun popularMangaParse(response: Response): MangasPage {
         val document = response.asJsoup()
-        val mangas = document.select(popularMangaSelector()).mapNotNull { element ->
+        val mangas = document.select(popularMangaSelector).mapNotNull { element ->
             val isNovel = element.selectFirst("span:contains(رواية)") != null
             if (isNovel) {
                 null
@@ -69,18 +67,12 @@ class Azora : ParsedHttpSource() {
                 popularMangaFromElement(element)
             }
         }
-        val hasNextPage = document.selectFirst(popularMangaNextPageSelector()) != null
+        val hasNextPage = document.selectFirst(nextPageSelector) != null
         return MangasPage(mangas, hasNextPage)
     }
 
     // =============================== Latest ===============================
     override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/series?page=$page", headers)
-
-    override fun latestUpdatesSelector() = popularMangaSelector()
-
-    override fun latestUpdatesFromElement(element: Element) = popularMangaFromElement(element)
-
-    override fun latestUpdatesNextPageSelector() = popularMangaNextPageSelector()
 
     override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
 
@@ -106,50 +98,47 @@ class Azora : ParsedHttpSource() {
         return GET(url.build(), headers)
     }
 
-    override fun searchMangaSelector() = popularMangaSelector()
-
-    override fun searchMangaFromElement(element: Element) = popularMangaFromElement(element)
-
-    override fun searchMangaNextPageSelector() = popularMangaNextPageSelector()
-
     override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
 
     // =========================== Manga Details ============================
-    override fun mangaDetailsParse(document: Document): SManga = SManga.create().apply {
-        title = document.selectFirst("h1[itemprop=name]")?.text()?.trim() ?: ""
+    override fun mangaDetailsParse(response: Response): SManga {
+        val document = response.asJsoup()
+        return SManga.create().apply {
+            title = document.selectFirst("h1[itemprop=name]")?.text()?.trim() ?: ""
 
-        val rawSrc = document.selectFirst("div[itemprop=image] img, img[alt*=Cover], img[src*=storage]")?.attr("abs:src")
-        thumbnail_url = if (rawSrc != null && rawSrc.contains("wsrv.nl/?url=")) {
-            try {
-                URLDecoder.decode(rawSrc.substringAfter("url=").substringBefore("&"), "UTF-8")
-            } catch (e: Exception) {
+            val rawSrc = document.selectFirst("div[itemprop=image] img, img[alt*=Cover], img[src*=storage]")?.attr("abs:src")
+            thumbnail_url = if (rawSrc != null && rawSrc.contains("wsrv.nl/?url=")) {
+                try {
+                    URLDecoder.decode(rawSrc.substringAfter("url=").substringBefore("&"), "UTF-8")
+                } catch (e: Exception) {
+                    rawSrc
+                }
+            } else {
                 rawSrc
             }
-        } else {
-            rawSrc
-        }
 
-        description = document.select("div[itemprop=description] p").joinToString("\n") { it.text().trim() }
-        genre = document.select("a[itemprop=genre]").joinToString { it.text().trim() }
-        author = document.selectFirst("a[href^=/teams/] p.font-bold")?.text()?.trim()
+            description = document.select("div[itemprop=description] p").joinToString("\n") { it.text().trim() }
+            genre = document.select("a[itemprop=genre]").joinToString { it.text().trim() }
+            author = document.selectFirst("a[href^=/teams/] p.font-bold")?.text()?.trim()
 
-        val statusText = document.selectFirst("h1:contains(الحالة) ~ div p")?.text()?.trim()?.lowercase()
-            ?: document.selectFirst("h1:contains(الحالة) + div p")?.text()?.trim()?.lowercase()
+            val statusText = document.selectFirst("h1:contains(الحالة) ~ div p")?.text()?.trim()?.lowercase()
+                ?: document.selectFirst("h1:contains(الحالة) + div p")?.text()?.trim()?.lowercase()
 
-        status = when {
-            statusText == null -> SManga.UNKNOWN
-            statusText.contains("ongoing") || statusText.contains("مستمر") -> SManga.ONGOING
-            statusText.contains("completed") || statusText.contains("مكتمل") -> SManga.COMPLETED
-            statusText.contains("hiatus") || statusText.contains("متوقف") -> SManga.ON_HIATUS
-            statusText.contains("cancelled") || statusText.contains("ملغي") -> SManga.CANCELLED
-            else -> SManga.UNKNOWN
+            status = when {
+                statusText == null -> SManga.UNKNOWN
+                statusText.contains("ongoing") || statusText.contains("مستمر") -> SManga.ONGOING
+                statusText.contains("completed") || statusText.contains("مكتمل") -> SManga.COMPLETED
+                statusText.contains("hiatus") || statusText.contains("متوقف") -> SManga.ON_HIATUS
+                statusText.contains("cancelled") || statusText.contains("ملغي") -> SManga.CANCELLED
+                else -> SManga.UNKNOWN
+            }
         }
     }
 
     // ============================== Chapters ==============================
-    override fun chapterListSelector() = "div.mt-4.space-y-2 > div"
+    private val chapterSelector = "div.mt-4.space-y-2 > div"
 
-    override fun chapterFromElement(element: Element): SChapter = SChapter.create().apply {
+    private fun chapterFromElement(element: Element): SChapter = SChapter.create().apply {
         val link = element.selectFirst("a[href*=/chapter-]")!!
         setUrlWithoutDomain(link.attr("href"))
         name = link.selectFirst("span")?.text()?.trim() ?: "فصل"
@@ -158,7 +147,7 @@ class Azora : ParsedHttpSource() {
 
     override fun chapterListParse(response: Response): List<SChapter> {
         val document = response.asJsoup()
-        return document.select(chapterListSelector()).mapNotNull { element ->
+        return document.select(chapterSelector).mapNotNull { element ->
             val isLocked = element.selectFirst("div.bg-black/50, svg.lucide-lock") != null
             if (isLocked) {
                 null
@@ -235,12 +224,15 @@ class Azora : ParsedHttpSource() {
     }
 
     // =============================== Pages ================================
-    override fun pageListParse(document: Document): List<Page> = document.select("div.comic-images-wrapper img, figure.image-container img").mapIndexed { i, element ->
-        val url = element.attr("abs:src").ifEmpty { element.attr("abs:data-src") }
-        Page(i, imageUrl = url)
+    override fun pageListParse(response: Response): List<Page> {
+        val document = response.asJsoup()
+        return document.select("div.comic-images-wrapper img, figure.image-container img").mapIndexed { i, element ->
+            val url = element.attr("abs:src").ifEmpty { element.attr("abs:data-src") }
+            Page(i, imageUrl = url)
+        }
     }
 
-    override fun imageUrlParse(document: Document): String = throw UnsupportedOperationException()
+    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
 
     // =============================== Filters ==============================
     override fun getFilterList() = FilterList(
