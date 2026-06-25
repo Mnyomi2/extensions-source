@@ -187,14 +187,12 @@ class Azora : ParsedHttpSource() {
         return 0L
     }
 
-    private fun parseDate(dateStr: String): Long {
-        return try {
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
-                .apply { timeZone = TimeZone.getTimeZone("UTC") }
-                .parse(dateStr)?.time ?: 0L
-        } catch (e: Exception) {
-            0L
-        }
+    private fun parseDate(dateStr: String): Long = try {
+        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
+            .apply { timeZone = TimeZone.getTimeZone("UTC") }
+            .parse(dateStr)?.time ?: 0L
+    } catch (e: Exception) {
+        0L
     }
 
     private fun parseRelativeDate(dateStr: String): Long {
@@ -204,11 +202,19 @@ class Azora : ParsedHttpSource() {
         return when {
             cleanDate.contains("ثاني") || cleanDate.contains("seconds") -> System.currentTimeMillis()
             cleanDate.contains("دقيق") || cleanDate.contains("minute") -> {
-                val actualNum = if (cleanDate.contains("دقيقة واحدة")) 1 else if (cleanDate.contains("دقيقتين")) 2 else number
+                val actualNum = when {
+                    cleanDate.contains("دقيقة واحدة") -> 1
+                    cleanDate.contains("دقيقتين") -> 2
+                    else -> number
+                }
                 System.currentTimeMillis() - (actualNum * 60 * 1000L)
             }
             cleanDate.contains("ساع") || cleanDate.contains("hour") -> {
-                val actualNum = if (cleanDate.contains("ساعة واحدة")) 1 else if (cleanDate.contains("ساعتين")) 2 else number
+                val actualNum = when {
+                    cleanDate.contains("ساعة واحدة") -> 1
+                    cleanDate.contains("ساعتين") -> 2
+                    else -> number
+                }
                 System.currentTimeMillis() - (actualNum * 60 * 60 * 1000L)
             }
             cleanDate.contains("يوم") || cleanDate.contains("أيام") || cleanDate.contains("day") -> {
