@@ -235,11 +235,9 @@ class Azora : ParsedHttpSource() {
     }
 
     // =============================== Pages ================================
-    override fun pageListParse(document: Document): List<Page> {
-        return document.select("div.comic-images-wrapper img, figure.image-container img").mapIndexed { i, element ->
-            val url = element.attr("abs:src").ifEmpty { element.attr("abs:data-src") }
-            Page(i, imageUrl = url)
-        }
+    override fun pageListParse(document: Document): List<Page> = document.select("div.comic-images-wrapper img, figure.image-container img").mapIndexed { i, element ->
+        val url = element.attr("abs:src").ifEmpty { element.attr("abs:data-src") }
+        Page(i, imageUrl = url)
     }
 
     override fun imageUrlParse(document: Document): String = throw UnsupportedOperationException()
